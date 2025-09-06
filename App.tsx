@@ -10,7 +10,8 @@ import { ReferenceFinderModal } from './components/ReferenceFinderModal';
 import { AdvancedQueryWidget } from './components/AdvancedQueryWidget';
 import { AiInsightModal } from './components/AiInsightModal';
 import { ImageGenerationModal } from './components/ImageGenerationModal';
-import { Document, ContentBlock, GeminiUpdatePayload } from './types';
+import { UploadModal } from './components/UploadModal';
+import { Document, ContentBlock, GeminiUpdatePayload, ViewMode } from './types';
 import { analyzeAndIntegrateIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt } from './services/geminiService';
 import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
@@ -48,7 +49,7 @@ export default function App() {
       categories, activeDocument, totalWordCount,
       searchQuery, setSearchQuery, searchResults,
       scrollToHeading, setScrollToHeading,
-      handleSelectDocument, handleSelectSearchResult, handleNavigate,
+      handleSelectDocument, handleSelectSearchResult: handleSelectSearchResultFromHook, handleNavigate,
       handleDidScrollToHeading, handleUpdateBlock, handleSetContent,
       handleUpdateBlockContent,
       handleUpdateCategoryName, handleUpdateDocumentTitle,
@@ -65,6 +66,7 @@ export default function App() {
   const [isGlobalUpdateModalOpen, setIsGlobalUpdateModalOpen] = useState(false);
   const [isInsightModalOpen, setIsInsightModalOpen] = useState(false);
   const [isImageGenModalOpen, setIsImageGenModalOpen] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [imageGenState, setImageGenState] = useState<{ docId: string; insertionIndex: number } | null>(null);
   const [lastAiInsight, setLastAiInsight] = useState<(GeminiUpdatePayload & { rawJson: string }) | null>(null);
 
@@ -183,6 +185,14 @@ export default function App() {
       if (docSearchResultsCount > 0) {
           setDocSearchCurrentIndex(prev => (prev + 1) % docSearchResultsCount);
       }
+  };
+
+  const handleSelectSearchResult = (docId: string, viewMode: ViewMode) => {
+    // Copy the sidebar search query to the document search query state
+    setDocSearchQuery(searchQuery);
+
+    // Call the original handler to switch documents and clear the sidebar search
+    handleSelectSearchResultFromHook(docId, viewMode);
   };
 
   const handleSubmitIdea = async (idea: string, config: { maxOutputTokens: number; thinkingBudget: number }) => {
@@ -304,6 +314,132 @@ export default function App() {
         setAppError(err instanceof Error ? err.message : "Falha ao fazer o download dos dados.");
     }
   };
+  
+  const processUploadedContent = (content: string) => {
+    try {
+        let parsedData;
+        try {
+            parsedData = JSON.parse(content);
+        } catch (jsonError) {
+            try {
+               parsedData = decryptData(content);
+            } catch (decryptError) {
+                console.error("Falha na descriptografia e na análise JSON:", { jsonError, decryptError });
+                throw new Error('Formato de arquivo inválido. O arquivo deve ser um JSON válido ou um arquivo criptografado válido deste aplicativo.');
+            }
+        }
+        
+        const isDocumentArray = (arr: any): arr is Document[] => 
+            Array.isArray(arr) && arr.every(item => 
+                item && typeof item === 'object' && 'id' in item && 'title' in item && 'category' in item && 'content' in item
+            );
+
+        if (parsedData && typeof parsedData === 'object' && 'gdd' in parsedData && 'script' in parsedData && !Array.isArray(parsedData)) {
+            if (!isDocumentArray(parsedData.gdd) || !isDocumentArray(parsedData.script)) {
+                 throw new Error('Formato de arquivo inválido. O arquivo combinado deve conter arrays de documentos válidos para GDD e Roteiro.');
+            }
+            setDocuments(parsedData.gdd);
+            setScriptDocuments(parsedData.script);
+        } 
+        else if (isDocumentArray(parsedData)) {
+            setDocuments(parsedData);
+        } 
+        else {
+            throw new Error('Formato de arquivo desconhecido ou inválido. O arquivo deve conter um GDD e Roteiro combinados ou apenas um GDD antigo.');
+        }
+    } catch (err) {
+        console.error("Falha ao analisar o arquivo carregado", err);
+        setAppError(err instanceof Error ? err.message : 'Falha ao processar o arquivo. Certifique-se de que é um arquivo JSON válido ou um arquivo criptografado válido deste aplicativo.');
+    } finally {
+        setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
+    }
+  };
+
+  const handleUploadLocal = () => {
+    setIsUploadModalOpen(false);
+    setAppError(null);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json,text/plain';
+    
+    input.onchange = (event) => {
+        const target = event.target as HTMLInputElement;
+        const file = target.files?.[0];
+        if (!file) return;
+
+        setLoadingState({ isLoading: true, message: 'Processando arquivo...', currentTokens: 0, estimatedTokens: 0});
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target?.result;
+            if (typeof content === 'string') {
+                processUploadedContent(content);
+            }
+        };
+        reader.onerror = () => {
+             setAppError('Falha ao ler o arquivo.');
+             setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
+        };
+        reader.readAsText(file);
+    };
+    input.click();
+  };
+
+  const handleUploadFromUrl = async (url: string) => {
+    setIsUploadModalOpen(false);
+    setAppError(null);
+
+    const fileIdMatch = url.match(/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (!fileIdMatch || !fileIdMatch[1]) {
+        setAppError("URL do Google Drive inválida. Certifique-se de que é um link de compartilhamento de arquivo.");
+        return;
+    }
+    const fileId = fileIdMatch[1];
+
+    setLoadingState({ isLoading: true, message: 'Baixando arquivo do Google Drive...', currentTokens: 0, estimatedTokens: 0 });
+
+    try {
+        // 1. Tentar fazer o fetch público primeiro
+        const publicUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${process.env.API_KEY}`;
+        const publicResponse = await fetch(publicUrl);
+
+        if (publicResponse.ok) {
+            const content = await publicResponse.text();
+            setLoadingState(prev => ({ ...prev, message: 'Processando arquivo público...' }));
+            processUploadedContent(content);
+            return; // Sucesso, terminar aqui
+        }
+
+        // 2. Se a tentativa pública falhar, verificar se o usuário está autenticado
+        if (!googleAccessToken) {
+            throw new Error('Não foi possível buscar o arquivo público. Se for um arquivo privado, por favor, conecte sua conta do Google primeiro.');
+        }
+
+        // 3. Se estiver autenticado, tentar fazer o fetch privado como fallback
+        setLoadingState(prev => ({ ...prev, message: 'Tentando acesso privado...' }));
+        const privateResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+            headers: {
+                'Authorization': `Bearer ${googleAccessToken}`
+            }
+        });
+
+        if (!privateResponse.ok) {
+            if (privateResponse.status === 401) {
+                throw new Error('Não autorizado. Sua sessão do Google pode ter expirado. Por favor, conecte-se novamente.');
+            }
+            throw new Error(`Falha ao buscar o arquivo do Google Drive: ${privateResponse.statusText}`);
+        }
+
+        const content = await privateResponse.text();
+        setLoadingState(prev => ({ ...prev, message: 'Processando arquivo privado...' }));
+        processUploadedContent(content);
+
+    } catch (err) {
+        console.error("Falha ao carregar do Google Drive", err);
+        setAppError(err instanceof Error ? err.message : "Ocorreu um erro desconhecido ao carregar do Google Drive.");
+        setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
+    }
+  };
 
   const handleGenerateDocs = async () => {
     setAppError(null);
@@ -347,74 +483,6 @@ export default function App() {
         setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
       }, 1500);
     }
-  };
-
-  const handleUpload = () => {
-    setAppError(null);
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json,text/plain';
-    
-    input.onchange = (event) => {
-        const target = event.target as HTMLInputElement;
-        const file = target.files?.[0];
-        if (!file) return;
-
-        setLoadingState({ isLoading: true, message: 'Processando arquivo...', currentTokens: 0, estimatedTokens: 0});
-        
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const content = e.target?.result;
-            if (typeof content === 'string') {
-                try {
-                    let parsedData;
-                    // First, try to parse as plain JSON (for old files)
-                    try {
-                        parsedData = JSON.parse(content);
-                    } catch (jsonError) {
-                        // If that fails, assume it's encrypted and try to decrypt
-                        try {
-                           parsedData = decryptData(content);
-                        } catch (decryptError) {
-                            // If decryption also fails, then it's an invalid file
-                            console.error("Falha na descriptografia e na análise JSON:", { jsonError, decryptError });
-                            throw new Error('Formato de arquivo inválido. O arquivo deve ser um JSON válido ou um arquivo criptografado válido deste aplicativo.');
-                        }
-                    }
-                    
-                    const isDocumentArray = (arr: any): arr is Document[] => 
-                        Array.isArray(arr) && arr.every(item => 
-                            item && typeof item === 'object' && 'id' in item && 'title' in item && 'category' in item && 'content' in item
-                        );
-
-                    if (parsedData && typeof parsedData === 'object' && 'gdd' in parsedData && 'script' in parsedData && !Array.isArray(parsedData)) {
-                        if (!isDocumentArray(parsedData.gdd) || !isDocumentArray(parsedData.script)) {
-                             throw new Error('Formato de arquivo inválido. O arquivo combinado deve conter arrays de documentos válidos para GDD e Roteiro.');
-                        }
-                        setDocuments(parsedData.gdd);
-                        setScriptDocuments(parsedData.script);
-                    } 
-                    else if (isDocumentArray(parsedData)) {
-                        setDocuments(parsedData);
-                    } 
-                    else {
-                        throw new Error('Formato de arquivo desconhecido ou inválido. O arquivo deve conter um GDD e Roteiro combinados ou apenas um GDD antigo.');
-                    }
-                } catch (err) {
-                    console.error("Falha ao analisar o arquivo carregado", err);
-                    setAppError(err instanceof Error ? err.message : 'Falha ao processar o arquivo. Certifique-se de que é um arquivo JSON válido ou um arquivo criptografado válido deste aplicativo.');
-                } finally {
-                    setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
-                }
-            }
-        };
-        reader.onerror = () => {
-             setAppError('Falha ao ler o arquivo.');
-             setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
-        };
-        reader.readAsText(file);
-    };
-    input.click();
   };
 
   const handleOpenRefinementModal = (docId: string, blockIndex: number, text: string, itemIndex?: number) => {
@@ -726,9 +794,9 @@ export default function App() {
                          </button>
                          <hr className="border-gray-600 my-1" />
                          <button
-                            onClick={() => { handleUpload(); setIsMenuOpen(false); }}
+                            onClick={() => { setIsUploadModalOpen(true); setIsMenuOpen(false); }}
                             className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
-                            title="Carregar GDD e Roteiro do computador"
+                            title="Carregar GDD e Roteiro"
                         >
                            <UploadIcon />
                            <span className="ml-3">Carregar GDD & Roteiro</span>
@@ -782,6 +850,7 @@ export default function App() {
             <div className="m-4 p-4 bg-red-800/50 border border-red-600 text-red-200 rounded-md">
                 <h3 className="font-bold">Ocorreu um Erro</h3>
                 <p>{appError}</p>
+                <button onClick={() => setAppError(null)} className="absolute top-2 right-2 text-red-200 hover:text-white">&times;</button>
             </div>
          )}
 
@@ -818,6 +887,16 @@ export default function App() {
         isOpen={isImageGenModalOpen}
         onClose={() => setIsImageGenModalOpen(false)}
         onSubmit={handleSubmitImageGeneration}
+      />
+       <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onUploadLocal={handleUploadLocal}
+        onUploadFromUrl={handleUploadFromUrl}
+        isGoogleAuth={!!googleAccessToken}
+        onGoogleAuthClick={() => {
+            handleGoogleAuthClick();
+        }}
       />
       <RefinementModal
         isOpen={refinementModalState.isOpen}
