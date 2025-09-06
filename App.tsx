@@ -17,6 +17,7 @@ import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
 import { applyChanges, estimateTokens } from './utils/helpers';
 import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon } from './assets/icons';
+import { encryptData, decryptData } from './utils/crypto';
 
 
 interface RefinementModalState {
@@ -242,8 +243,8 @@ export default function App() {
             gdd: documents,
             script: scriptDocuments,
         };
-        const dataStr = JSON.stringify(combinedData, null, 2);
-        const blob = new Blob([dataStr], { type: "application/json" });
+        const encryptedData = encryptData(combinedData);
+        const blob = new Blob([encryptedData], { type: "text/plain" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -306,7 +307,7 @@ export default function App() {
     setAppError(null);
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'application/json,.json';
+    input.accept = 'application/json,.json,text/plain';
     
     input.onchange = (event) => {
         const target = event.target as HTMLInputElement;
@@ -320,7 +321,20 @@ export default function App() {
             const content = e.target?.result;
             if (typeof content === 'string') {
                 try {
-                    const parsedData = JSON.parse(content);
+                    let parsedData;
+                    // First, try to parse as plain JSON (for old files)
+                    try {
+                        parsedData = JSON.parse(content);
+                    } catch (jsonError) {
+                        // If that fails, assume it's encrypted and try to decrypt
+                        try {
+                           parsedData = decryptData(content);
+                        } catch (decryptError) {
+                            // If decryption also fails, then it's an invalid file
+                            console.error("Falha na descriptografia e na análise JSON:", { jsonError, decryptError });
+                            throw new Error('Formato de arquivo inválido. O arquivo deve ser um JSON válido ou um arquivo criptografado válido deste aplicativo.');
+                        }
+                    }
                     
                     const isDocumentArray = (arr: any): arr is Document[] => 
                         Array.isArray(arr) && arr.every(item => 
@@ -342,7 +356,7 @@ export default function App() {
                     }
                 } catch (err) {
                     console.error("Falha ao analisar o arquivo carregado", err);
-                    setAppError(err instanceof Error ? err.message : 'Falha ao processar o arquivo. Certifique-se de que é um arquivo JSON válido.');
+                    setAppError(err instanceof Error ? err.message : 'Falha ao processar o arquivo. Certifique-se de que é um arquivo JSON válido ou um arquivo criptografado válido deste aplicativo.');
                 } finally {
                     setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
                 }
