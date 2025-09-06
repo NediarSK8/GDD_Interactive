@@ -16,7 +16,7 @@ import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
 import { applyChanges, estimateTokens } from './utils/helpers';
-import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon } from './assets/icons';
+import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon, ChevronUpIcon, ChevronDownIcon } from './assets/icons';
 import { encryptData, decryptData } from './utils/crypto';
 
 
@@ -90,6 +90,11 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
+  // State for document-specific search, now living in the parent component
+  const [docSearchQuery, setDocSearchQuery] = useState('');
+  const [docSearchResultsCount, setDocSearchResultsCount] = useState(0);
+  const [docSearchCurrentIndex, setDocSearchCurrentIndex] = useState(-1);
+  
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isResizingRef.current) return;
@@ -123,6 +128,14 @@ export default function App() {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }, []);
+    
+    // Effect to clear document search when the active document changes
+    useEffect(() => {
+        setDocSearchQuery('');
+        setDocSearchResultsCount(0);
+        setDocSearchCurrentIndex(-1);
+    }, [activeDocument?.id]);
+
 
     const handleMouseDownOnResizer = (e: React.MouseEvent) => {
         if (isSidebarCollapsed) return;
@@ -153,6 +166,24 @@ export default function App() {
   useEffect(() => {
     if (authError) setAppError(authError);
   }, [authError]);
+  
+  const handleDocSearchQueryChange = (query: string) => {
+      setDocSearchQuery(query);
+      // When user types, reset to the first result
+      setDocSearchCurrentIndex(query.trim() ? 0 : -1);
+  };
+
+  const handleDocSearchPrev = () => {
+      if (docSearchResultsCount > 0) {
+          setDocSearchCurrentIndex(prev => (prev - 1 + docSearchResultsCount) % docSearchResultsCount);
+      }
+  };
+
+  const handleDocSearchNext = () => {
+      if (docSearchResultsCount > 0) {
+          setDocSearchCurrentIndex(prev => (prev + 1) % docSearchResultsCount);
+      }
+  };
 
   const handleSubmitIdea = async (idea: string, config: { maxOutputTokens: number; thinkingBudget: number }) => {
     setIsIdeaModalOpen(false);
@@ -618,7 +649,7 @@ export default function App() {
       </button>
       <main className="flex-1 flex flex-col bg-gray-900 overflow-y-auto min-w-0">
          <header className="sticky top-0 z-30 flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700">
-             <div className="flex items-center">
+             <div className="flex items-center flex-shrink-0">
                 <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                     <BrainIcon />
                     GDD Interativo com IA
@@ -638,7 +669,33 @@ export default function App() {
                     </button>
                 </div>
              </div>
-             <div className="relative" ref={menuRef}>
+             <div className="flex-grow flex justify-center px-4">
+                {activeDocument && (
+                    <div className="relative w-full max-w-lg">
+                        <input
+                            type="text"
+                            value={docSearchQuery}
+                            onChange={(e) => handleDocSearchQueryChange(e.target.value)}
+                            placeholder="Pesquisar neste documento..."
+                            className="w-full bg-gray-800 border border-gray-600 rounded-full py-2 pl-4 pr-32 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        {docSearchQuery && (
+                            <div className="absolute inset-y-0 right-2 flex items-center space-x-1 text-gray-400">
+                                <span className="text-xs px-2">
+                                    {docSearchResultsCount > 0 ? `${docSearchCurrentIndex + 1} de ${docSearchResultsCount}` : '0/0'}
+                                </span>
+                                <button onClick={handleDocSearchPrev} disabled={docSearchResultsCount === 0} className="p-1 rounded-full hover:bg-gray-700 disabled:text-gray-600">
+                                    <ChevronUpIcon />
+                                </button>
+                                <button onClick={handleDocSearchNext} disabled={docSearchResultsCount === 0} className="p-1 rounded-full hover:bg-gray-700 disabled:text-gray-600">
+                                    <ChevronDownIcon />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+             </div>
+             <div className="relative flex-shrink-0" ref={menuRef}>
                 <button
                     onClick={() => setIsMenuOpen(prev => !prev)}
                     className="p-2 rounded-full hover:bg-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-indigo-500"
@@ -740,6 +797,9 @@ export default function App() {
             scrollToHeading={scrollToHeading}
             onDidScrollToHeading={handleDidScrollToHeading}
             onOpenImageGenerationModal={handleOpenImageGenerationModal}
+            docSearchQuery={docSearchQuery}
+            docSearchCurrentIndex={docSearchCurrentIndex}
+            onDocSearchResultsChange={setDocSearchResultsCount}
          />
       </main>
       <IdeaInputModal 
