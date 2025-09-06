@@ -224,7 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside 
       style={{ width: `${width}px` }}
-      className="bg-gray-800 text-white flex flex-col h-full border-r border-gray-700 flex-shrink-0"
+      className="bg-gray-800 text-white flex flex-col h-full border-r border-gray-700 flex-shrink-0 transition-all duration-300 overflow-hidden"
     >
       <div className="p-4 border-b border-gray-700">
         <h2 className="text-xl font-semibold mb-3">{title}</h2>

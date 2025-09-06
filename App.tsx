@@ -57,6 +57,8 @@ export default function App() {
   const { googleAccessToken, authError, handleGoogleAuthClick } = useGoogleAuth();
   
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [lastSidebarWidth, setLastSidebarWidth] = useState(320);
   const isResizingRef = useRef(false);
   const [isIdeaModalOpen, setIsIdeaModalOpen] = useState(false);
   const [isGlobalUpdateModalOpen, setIsGlobalUpdateModalOpen] = useState(false);
@@ -107,10 +109,24 @@ export default function App() {
     }, []);
 
     const handleMouseDownOnResizer = (e: React.MouseEvent) => {
+        if (isSidebarCollapsed) return;
         e.preventDefault();
         isResizingRef.current = true;
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
+    };
+
+    const handleToggleSidebar = () => {
+      setIsSidebarCollapsed(prev => {
+        const willCollapse = !prev;
+        if (willCollapse) {
+          setLastSidebarWidth(sidebarWidth);
+          setSidebarWidth(0);
+        } else {
+          setSidebarWidth(lastSidebarWidth);
+        }
+        return willCollapse;
+      });
     };
 
 
@@ -527,7 +543,7 @@ export default function App() {
 
 
   return (
-    <div className="flex h-screen font-sans">
+    <div className="flex h-screen font-sans relative">
       {(loadingState.isLoading || isDBLoading) && (
           <LoadingOverlay 
               message={isDBLoading ? "Carregando documentos..." : loadingState.message}
@@ -553,11 +569,24 @@ export default function App() {
         searchResults={searchResults}
         onSelectSearchResult={handleSelectSearchResult}
       />
-      <div
-        onMouseDown={handleMouseDownOnResizer}
-        className="w-1.5 flex-shrink-0 bg-gray-700 hover:bg-indigo-500 transition-colors duration-200"
-        style={{ cursor: 'col-resize' }}
-      />
+      {!isSidebarCollapsed && (
+        <div
+            onMouseDown={handleMouseDownOnResizer}
+            className="w-1.5 flex-shrink-0 bg-gray-700 hover:bg-indigo-500 transition-colors duration-200"
+            style={{ cursor: 'col-resize' }}
+        />
+      )}
+      <button
+        onClick={handleToggleSidebar}
+        className="absolute top-1/2 -translate-y-1/2 bg-gray-800 hover:bg-indigo-600 border border-gray-700 text-white rounded-full p-1 z-40 transition-all duration-200 shadow-lg"
+        style={{ left: isSidebarCollapsed ? '8px' : `${sidebarWidth - 16}px` }}
+        title={isSidebarCollapsed ? "Expandir" : "Recolher"}
+        aria-label={isSidebarCollapsed ? "Expandir painel lateral" : "Recolher painel lateral"}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 transition-transform ${isSidebarCollapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
       <main className="flex-1 flex flex-col bg-gray-900 overflow-y-auto min-w-0">
          <header className="sticky top-0 z-30 flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700">
              <div className="flex items-center">
