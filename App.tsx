@@ -718,11 +718,7 @@ export default function App() {
       <main className="flex-1 flex flex-col bg-gray-900 overflow-y-auto min-w-0">
          <header className="sticky top-0 z-30 flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700">
              <div className="flex items-center flex-shrink-0">
-                <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                    <BrainIcon />
-                    GDD Interativo com IA
-                </h1>
-                <div className="ml-4 bg-gray-800 p-1 rounded-lg flex items-center">
+                <div className="bg-gray-800 p-1 rounded-lg flex items-center">
                     <button
                         onClick={() => setViewMode('gdd')}
                         className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${viewMode === 'gdd' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}
