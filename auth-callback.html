@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Autenticando...</title>
+  <script>
+    try {
+      // Verifica se há um hash na URL (onde o Google coloca o token)
+      if (window.location.hash) {
+        // Usa URLSearchParams para analisar facilmente os parâmetros do hash
+        const params = new URLSearchParams(window.location.hash.substring(1));
+        const token = params.get('access_token');
+
+        // Se um token for encontrado e a janela principal (opener) tiver a função de callback,
+        // chama a função com o token
+        if (token && window.opener && window.opener.handleGoogleAuthCallback) {
+          window.opener.handleGoogleAuthCallback(token);
+        }
+      }
+    } catch (e) {
+      console.error('Erro no callback de autenticação:', e);
+    } finally {
+      // Fecha a janela pop-up, independentemente de ter sucesso ou falha
+      window.close();
+    }
+  </script>
+</head>
+<body>
+  <p>Aguarde, autenticando...</p>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "name": "AI-Powered Interactive GDD",
+  "description": "An interactive Game Design Document (GDD) application, similar to Wikipedia, where keywords are links. An AI assistant analyzes new ideas and seamlessly integrates them into the document structure, facilitating collaborative and evolving game design.",
+  "requestFramePermissions": []
+}
