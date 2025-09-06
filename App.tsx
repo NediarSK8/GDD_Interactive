@@ -16,7 +16,7 @@ import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
 import { applyChanges, estimateTokens } from './utils/helpers';
-import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon } from './assets/icons';
+import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon } from './assets/icons';
 import { encryptData, decryptData } from './utils/crypto';
 
 
@@ -86,6 +86,9 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const geminiChat = useRef<Chat | null>(null);
+
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -107,6 +110,18 @@ export default function App() {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
+    }, []);
+
+    useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+        if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+          setIsMenuOpen(false);
+        }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
     }, []);
 
     const handleMouseDownOnResizer = (e: React.MouseEvent) => {
@@ -604,7 +619,7 @@ export default function App() {
       <main className="flex-1 flex flex-col bg-gray-900 overflow-y-auto min-w-0">
          <header className="sticky top-0 z-30 flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700">
              <div className="flex items-center">
-                <h1 className="text-2xl font-bold text-white flex items-center">
+                <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                     <BrainIcon />
                     GDD Interativo com IA
                 </h1>
@@ -623,66 +638,86 @@ export default function App() {
                     </button>
                 </div>
              </div>
-             <div className="flex items-center space-x-2">
+             <div className="relative" ref={menuRef}>
                 <button
-                    onClick={handleUpload}
-                    className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-lg flex items-center transition-colors duration-200"
-                    title="Carregar GDD e Roteiro do computador"
+                    onClick={() => setIsMenuOpen(prev => !prev)}
+                    className="p-2 rounded-full hover:bg-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-indigo-500"
+                    aria-haspopup="true"
+                    aria-expanded={isMenuOpen}
+                    title="Menu de Ações"
                 >
-                    <UploadIcon />
+                    <MenuIcon />
                 </button>
-                <button
-                    onClick={handleDownload}
-                    className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-lg flex items-center transition-colors duration-200"
-                    title="Salvar GDD e Roteiro no computador"
-                >
-                    <DownloadIcon />
-                </button>
-                <button
-                    onClick={handleGoogleAuthClick}
-                    disabled={!!googleAccessToken}
-                    className={`font-bold py-2 px-3 rounded-lg flex items-center transition-colors duration-200 ${
-                        googleAccessToken
-                            ? 'bg-green-700 text-white cursor-not-allowed'
-                            : 'bg-gray-700 hover:bg-gray-600 text-white'
-                    }`}
-                    title={googleAccessToken ? "Conectado ao Google Drive" : "Conectar ao Google Drive para salvar backups"}
-                >
-                    <GoogleDriveIcon />
-                </button>
-                <button
-                    onClick={handleGenerateDocs}
-                    className="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-3 rounded-lg flex items-center transition-colors duration-200"
-                    title="Gerar e baixar o documento completo"
-                >
-                    <DocumentIcon />
-                </button>
-                <button
-                    onClick={() => setIsInsightModalOpen(true)}
-                    disabled={!lastAiInsight}
-                    className="bg-teal-600 hover:bg-teal-500 text-white font-bold py-2 px-4 rounded-lg flex items-center transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed"
-                    title="Ver o processo de raciocínio da última ação da IA"
-                    >
-                    <AiInsightIcon />
-                    Ver Raciocínio da IA
-                </button>
-                 <button
-                    onClick={() => setIsGlobalUpdateModalOpen(true)}
-                    className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded-lg flex items-center transition-colors duration-200"
-                    title={`Atualizar todo o ${viewMode.toUpperCase()} com uma instrução`}
-                    >
-                    <MagicWandIcon />
-                    Atualização Global
-                </button>
-                <button
-                    onClick={() => setIsIdeaModalOpen(true)}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-lg flex items-center transition-colors duration-200"
-                    >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-                    </svg>
-                    Integrar Nova Ideia
-                </button>
+                {isMenuOpen && (
+                    <div className="absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-2 z-50 animate-dropdown">
+                         <button
+                            onClick={() => { setIsIdeaModalOpen(true); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-left font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors rounded-md"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                            </svg>
+                            <span className="ml-3">Integrar Nova Ideia</span>
+                        </button>
+                         <button
+                            onClick={() => { setIsGlobalUpdateModalOpen(true); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
+                            title={`Atualizar todo o ${viewMode.toUpperCase()} com uma instrução`}
+                         >
+                             <MagicWandIcon />
+                             <span className="ml-3">Atualização Global</span>
+                         </button>
+                         <hr className="border-gray-600 my-1" />
+                         <button
+                            onClick={() => { handleUpload(); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
+                            title="Carregar GDD e Roteiro do computador"
+                        >
+                           <UploadIcon />
+                           <span className="ml-3">Carregar GDD & Roteiro</span>
+                        </button>
+                         <button
+                            onClick={() => { handleDownload(); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
+                            title="Salvar GDD e Roteiro no computador"
+                         >
+                            <DownloadIcon />
+                            <span className="ml-3">Salvar GDD & Roteiro</span>
+                         </button>
+                         <button
+                            onClick={() => { handleGenerateDocs(); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
+                            title="Gerar e baixar o documento completo"
+                         >
+                            <DocumentIcon />
+                            <span className="ml-3">Gerar Documentos .docx</span>
+                         </button>
+
+                         <hr className="border-gray-600 my-1" />
+
+                         <button
+                            onClick={() => { handleGoogleAuthClick(); setIsMenuOpen(false); }}
+                            disabled={!!googleAccessToken}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors rounded-md text-left"
+                            title={googleAccessToken ? "Conectado ao Google Drive" : "Conectar ao Google Drive para salvar backups"}
+                         >
+                            <GoogleDriveIcon />
+                            <span className="ml-3">{googleAccessToken ? "Conectado ao Google Drive" : "Conectar ao Google Drive"}</span>
+                         </button>
+
+                         <hr className="border-gray-600 my-1" />
+
+                         <button
+                            onClick={() => { setIsInsightModalOpen(true); setIsMenuOpen(false); }}
+                            disabled={!lastAiInsight}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors rounded-md text-left"
+                            title="Ver o processo de raciocínio da última ação da IA"
+                         >
+                            <AiInsightIcon />
+                            <span className="ml-3">Ver Raciocínio da IA</span>
+                         </button>
+                    </div>
+                )}
              </div>
          </header>
 

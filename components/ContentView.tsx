@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, ContentBlock, ImageBlock, HeadingBlock, ListBlock, DefinitionListBlock } from '../types';
-import { HeadingLevelIcon, ParagraphIcon, ListIcon, ImageIcon, BlockquoteIcon, AiImageIcon } from '../assets/icons';
+import { HeadingLevelIcon, ParagraphIcon, ListIcon, ImageIcon, BlockquoteIcon, AiImageIcon, ChevronUpIcon, ChevronDownIcon } from '../assets/icons';
 
 interface PopupState {
     top: number;
@@ -36,6 +36,17 @@ interface ContentViewProps {
   scrollToHeading: string | null;
   onDidScrollToHeading: () => void;
   onOpenImageGenerationModal: (docId: string, index: number) => void;
+  docSearchQuery: string;
+  docSearchCurrentIndex: number;
+  onDocSearchResultsChange: (count: number) => void;
+}
+
+interface SearchMatch {
+    blockIndex: number;
+    itemIndex?: number | string;
+    start: number;
+    end: number;
+    ref: React.RefObject<HTMLElement>;
 }
 
 const WelcomeScreen = () => (
@@ -113,7 +124,7 @@ const LinkIcon: React.FC = () => (
 );
 
 
-export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments, onNavigate, onRefineRequest, onFindReferences, onUpdateBlock, onUpdateBlockContent, onSetContent, scrollToHeading, onDidScrollToHeading, onOpenImageGenerationModal }) => {
+export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments, onNavigate, onRefineRequest, onFindReferences, onUpdateBlock, onUpdateBlockContent, onSetContent, scrollToHeading, onDidScrollToHeading, onOpenImageGenerationModal, docSearchQuery, docSearchCurrentIndex, onDocSearchResultsChange }) => {
   const [popupState, setPopupState] = useState<PopupState | null>(null);
   const [headingLevelPopupState, setHeadingLevelPopupState] = useState<HeadingLevelPopupState | null>(null);
   const [editingBlock, setEditingBlock] = useState<{ blockIndex: number; itemIndex?: number } | null>(null);
@@ -123,6 +134,76 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
   const [addBlockMenuState, setAddBlockMenuState] = useState<AddBlockMenuState | null>(null);
   const [imageInsertionIndex, setImageInsertionIndex] = useState(0);
   const [imagePreview, setImagePreview] = useState<{ src: string; top: number; left: number } | null>(null);
+
+  const [searchResults, setSearchResults] = useState<SearchMatch[]>([]);
+
+  const normalizeText = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  };
+
+  useEffect(() => {
+      if (!docSearchQuery.trim() || !document) {
+          setSearchResults([]);
+          onDocSearchResultsChange(0);
+          return;
+      }
+
+      const normalizedQuery = normalizeText(docSearchQuery);
+      if (!normalizedQuery) return;
+
+      const results: SearchMatch[] = [];
+
+      const findMatchesInText = (text: string, itemIndex?: number | string) => {
+          if (!text) return;
+          const normalizedText = normalizeText(text);
+          let startIndex = 0;
+          while ((startIndex = normalizedText.indexOf(normalizedQuery, startIndex)) !== -1) {
+              results.push({
+                  blockIndex: results.length, // Placeholder, will be replaced by actual block index
+                  itemIndex,
+                  start: startIndex,
+                  end: startIndex + docSearchQuery.length,
+                  ref: React.createRef()
+              });
+              startIndex += 1;
+          }
+      };
+
+      document.content.forEach((block, blockIndex) => {
+          const currentResultsCount = results.length;
+          
+          if (block.type === 'heading' || block.type === 'paragraph' || block.type === 'blockquote') {
+              findMatchesInText(block.text);
+          } else if (block.type === 'list' && Array.isArray(block.items) && typeof block.items[0] === 'string') {
+              (block.items as string[]).forEach((item, itemIndex) => findMatchesInText(item, itemIndex));
+          } else if (block.type === 'definition_list' && Array.isArray(block.items)) {
+              block.items.forEach((item, itemIndex) => {
+                  findMatchesInText(item.term, `dl-${itemIndex}-term`);
+                  findMatchesInText(item.description, `dl-${itemIndex}-desc`);
+              });
+          } else if (block.type === 'image') {
+              findMatchesInText(block.caption);
+          }
+
+          // Assign correct blockIndex to newly found results
+          for (let i = currentResultsCount; i < results.length; i++) {
+              results[i].blockIndex = blockIndex;
+          }
+      });
+
+      setSearchResults(results);
+      onDocSearchResultsChange(results.length);
+  }, [docSearchQuery, document, onDocSearchResultsChange]);
+
+  useEffect(() => {
+    if (docSearchCurrentIndex !== -1 && searchResults[docSearchCurrentIndex]) {
+        searchResults[docSearchCurrentIndex].ref.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+        });
+    }
+  }, [docSearchCurrentIndex, searchResults]);
 
   useEffect(() => {
     if (scrollToHeading && document) {
@@ -363,18 +444,58 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
         return { docTitleMap, headingMap };
     }, [allDocuments]);
 
-    const renderInline = (text: string | undefined): (JSX.Element | string)[] => {
+     const renderContentText = (text: string | undefined, blockIndex: number, itemIndex?: number | string): React.ReactNode[] => {
         if (!text) return [];
-        const parts = text.split(/(\[\[.*?\]\])/g).filter(Boolean);
 
-        return parts.map((part, index) => {
-            if (part.startsWith('[[') && part.endsWith(']]')) {
-                const fullContent = part.slice(2, -2);
+        type Marker = { start: number; end: number; type: 'link' | 'highlight' | 'active-highlight'; data: string; ref?: React.RefObject<HTMLElement>; };
+        const markers: Marker[] = [];
 
+        // 1. Find links
+        const linkRegex = /\[\[(.*?)\]\]/g;
+        let linkMatch;
+        while ((linkMatch = linkRegex.exec(text)) !== null) {
+            markers.push({ start: linkMatch.index, end: linkMatch.index + linkMatch[0].length, type: 'link', data: linkMatch[0] });
+        }
+        
+        // 2. Find search results for this specific text block
+        const relevantResults = searchResults.filter(r => r.blockIndex === blockIndex && r.itemIndex === itemIndex);
+        relevantResults.forEach(result => {
+            const globalIndex = searchResults.findIndex(sr => sr === result);
+            markers.push({ 
+                start: result.start, 
+                end: result.end, 
+                type: globalIndex === docSearchCurrentIndex ? 'active-highlight' : 'highlight',
+                data: text.substring(result.start, result.end),
+                ref: result.ref
+            });
+        });
+        
+        // Filter out search highlights that are inside links.
+        const filteredMarkers = markers.filter((marker, i, arr) => {
+            if (marker.type.includes('highlight')) {
+                return !arr.some(other => other.type === 'link' && marker.start >= other.start && marker.end <= other.end);
+            }
+            return true;
+        });
+
+        if (filteredMarkers.length === 0) return [text];
+
+        filteredMarkers.sort((a, b) => a.start - b.start);
+
+        const nodes: React.ReactNode[] = [];
+        let lastIndex = 0;
+
+        filteredMarkers.forEach((marker, i) => {
+            if (marker.start > lastIndex) {
+                nodes.push(text.substring(lastIndex, marker.start));
+            }
+
+            const content = marker.data;
+            if (marker.type === 'link') {
+                const fullContent = content.slice(2, -2);
                 let linkTarget = fullContent;
                 let displayText = fullContent;
                 let hasCustomDisplay = false;
-
                 if (fullContent.includes('|')) {
                     const splitContent = fullContent.split('|');
                     linkTarget = splitContent[0];
@@ -386,48 +507,47 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                     const imgId = linkTarget.substring(4);
                     const imageBlock = document?.content.find(b => b.type === 'image' && b.id === imgId) as ImageBlock | undefined;
                     if (imageBlock) {
-                        return (
-                            <span
-                                key={index}
-                                onMouseEnter={(e) => {
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    setImagePreview({ src: imageBlock.src, top: rect.bottom + 5, left: rect.left });
-                                }}
-                                onMouseLeave={() => setImagePreview(null)}
-                                className="text-green-400 font-semibold hover:underline bg-green-900/30 px-1 py-0.5 rounded-sm transition-colors cursor-pointer"
-                            >
+                        nodes.push(
+                            <span key={`${i}-imglink`} onMouseEnter={(e) => { const rect = e.currentTarget.getBoundingClientRect(); setImagePreview({ src: imageBlock.src, top: rect.bottom + 5, left: rect.left }); }} onMouseLeave={() => setImagePreview(null)} className="text-green-400 font-semibold hover:underline bg-green-900/30 px-1 py-0.5 rounded-sm transition-colors cursor-pointer" >
                                 {hasCustomDisplay ? displayText : `img:${imgId.slice(-4)}`}
                             </span>
                         );
                     } else {
-                        return <span key={index} className="text-red-400 line-through px-1" title={`Imagem não encontrada: "${imgId}"`}>{hasCustomDisplay ? displayText : imgId}</span>;
+                        nodes.push(<span key={`${i}-imglink`} className="text-red-400 line-through px-1" title={`Imagem não encontrada: "${imgId}"`}>{hasCustomDisplay ? displayText : imgId}</span>);
+                    }
+                } else {
+                    let docTitle = linkTarget;
+                    let headingText: string | undefined = undefined;
+
+                    if (linkTarget.includes('#')) {
+                        [docTitle, headingText] = linkTarget.split('#', 2);
+                    }
+
+                    const docId = docTitleMap.get(docTitle.toLowerCase());
+                    if (docId) {
+                        const slug = headingText ? slugify(headingText) : undefined;
+                        nodes.push(<button key={`${i}-link`} onClick={() => onNavigate(docId, slug)} className="text-indigo-400 font-semibold hover:underline bg-indigo-900/30 px-1 py-0.5 rounded-sm transition-colors">{displayText}</button>);
+                    } else if (!headingText && headingMap.has(docTitle.toLowerCase())) {
+                        const headingMatch = headingMap.get(docTitle.toLowerCase())!;
+                        nodes.push(<button key={`${i}-link`} onClick={() => onNavigate(headingMatch.docId, headingMatch.slug)} className="text-indigo-400 font-semibold hover:underline bg-indigo-900/30 px-1 py-0.5 rounded-sm transition-colors">{displayText}</button>);
+                    } else {
+                        nodes.push(<span key={`${i}-link`} className="text-red-400 line-through px-1" title={`Link não encontrado: "${linkTarget}"`}>{displayText}</span>);
                     }
                 }
-
-                let docTitle = linkTarget;
-                let headingText: string | undefined = undefined;
-
-                if (linkTarget.includes('#')) {
-                    [docTitle, headingText] = linkTarget.split('#', 2);
-                }
-
-                const docId = docTitleMap.get(docTitle.toLowerCase());
-                if (docId) {
-                    const slug = headingText ? slugify(headingText) : undefined;
-                    return <button key={index} onClick={() => onNavigate(docId, slug)} className="text-indigo-400 font-semibold hover:underline bg-indigo-900/30 px-1 py-0.5 rounded-sm transition-colors">{displayText}</button>;
-                }
-
-                if (!headingText) {
-                    const headingMatch = headingMap.get(docTitle.toLowerCase());
-                    if (headingMatch) {
-                        return <button key={index} onClick={() => onNavigate(headingMatch.docId, headingMatch.slug)} className="text-indigo-400 font-semibold hover:underline bg-indigo-900/30 px-1 py-0.5 rounded-sm transition-colors">{displayText}</button>;
-                    }
-                }
-                
-                return <span key={index} className="text-red-400 line-through px-1" title={`Link não encontrado: "${linkTarget}"`}>{displayText}</span>;
+            } else { // highlight or active-highlight
+                 nodes.push(
+                    <mark key={`${i}-highlight`} ref={marker.ref} className={marker.type === 'active-highlight' ? 'search-highlight-active' : 'highlight'}>
+                        {content}
+                    </mark>
+                );
             }
-            return part;
+            lastIndex = marker.end;
         });
+
+        if (lastIndex < text.length) {
+            nodes.push(text.substring(lastIndex));
+        }
+        return nodes;
     };
   
   if (!document) {
@@ -560,11 +680,12 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                                 {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><HeadingLevelButton onClick={(e) => handleOpenHeadingLevelPopup(e, index, block.level)} /><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                 {(() => {
                                     const commonProps = { id: slug, 'data-block-index': index, className: 'scroll-mt-24' };
+                                    const children = renderContentText(block.text, index);
                                     switch (block.level) {
-                                        case 1: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{renderInline(block.text)}</h2>;
-                                        case 2: return <h3 {...commonProps} className={`${commonProps.className} text-xl font-semibold text-gray-200 mt-8 mb-2`}>{renderInline(block.text)}</h3>;
-                                        case 3: return <h4 {...commonProps} className={`${commonProps.className} text-lg font-medium text-gray-300 mt-6 mb-1`}>{renderInline(block.text)}</h4>;
-                                        default: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{renderInline(block.text)}</h2>;
+                                        case 1: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{children}</h2>;
+                                        case 2: return <h3 {...commonProps} className={`${commonProps.className} text-xl font-semibold text-gray-200 mt-8 mb-2`}>{children}</h3>;
+                                        case 3: return <h4 {...commonProps} className={`${commonProps.className} text-lg font-medium text-gray-300 mt-6 mb-1`}>{children}</h4>;
+                                        default: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{children}</h2>;
                                     }
                                 })()}
                             </div>
@@ -581,29 +702,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                             <div className="group relative">
                                 {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                 <p data-block-index={index}>
-                                    {(() => {
-                                        const paraText = block.text || '';
-                                        const colonIndex = paraText.indexOf(':');
-
-                                        // Heurística para colocar em negrito partes "chave:" de parágrafos.
-                                        if (colonIndex > 0 && colonIndex < paraText.length - 1) {
-                                            const preColonText = paraText.substring(0, colonIndex);
-                                            const words = preColonText.split(/\s+/).filter(Boolean);
-                                            
-                                            // Condição: 5 palavras ou menos antes do dois-pontos, e sem ponto final.
-                                            if (words.length <= 5 && !preColonText.includes('.')) {
-                                                const postColonText = paraText.substring(colonIndex + 1);
-                                                return (
-                                                    <React.Fragment>
-                                                        <strong className="text-gray-200">{renderInline(preColonText)}:</strong>
-                                                        {renderInline(postColonText)}
-                                                    </React.Fragment>
-                                                );
-                                            }
-                                        }
-
-                                        return renderInline(paraText);
-                                    })()}
+                                    {renderContentText(block.text, index)}
                                 </p>
                             </div>
                         );
@@ -619,7 +718,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                              <div className="group relative">
                                 {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                 <blockquote data-block-index={index} className="border-l-4 border-gray-500 pl-4 italic text-gray-400">
-                                    {renderInline(block.text)}
+                                    {renderContentText(block.text, index)}
                                 </blockquote>
                             </div>
                         );
@@ -648,7 +747,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                                                 ) : (
                                                     <div className="group/item relative">
                                                         {!editingBlock && <div className="absolute top-0 -right-8 z-10 opacity-0 group-hover/item:opacity-100 transition-opacity"><EditButton onClick={() => handleStartEditing(index, item, itemIndex)} /></div>}
-                                                        {renderInline(item)}
+                                                        {renderContentText(item, index, itemIndex)}
                                                     </div>
                                                 )}
                                             </li>
@@ -669,8 +768,8 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                                 <dl data-block-index={index}>
                                     {items.map((item, itemIndex) => (
                                         <div key={itemIndex} className="mb-2">
-                                            <dt className="font-semibold text-gray-200">{renderInline(item.term)}</dt>
-                                            <dd className="ml-4 text-gray-400">{renderInline(item.description)}</dd>
+                                            <dt className="font-semibold text-gray-200">{renderContentText(item.term, index, `dl-${itemIndex}-term`)}</dt>
+                                            <dd className="ml-4 text-gray-400">{renderContentText(item.description, index, `dl-${itemIndex}-desc`)}</dd>
                                         </div>
                                     ))}
                                 </dl>
@@ -691,7 +790,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                                     {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.caption)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                     <img src={block.src} alt={block.caption} className="w-full rounded-md shadow-lg" />
                                 </div>
-                                <figcaption className="text-center text-sm italic text-gray-400 mt-2">{renderInline(block.caption)}</figcaption>
+                                <figcaption className="text-center text-sm italic text-gray-400 mt-2">{renderContentText(block.caption, index)}</figcaption>
                             </figure>
                         )
                     }
