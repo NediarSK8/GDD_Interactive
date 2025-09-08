@@ -64,3 +64,14 @@ export interface SearchResult {
   viewMode: ViewMode;
   snippets: React.ReactNode[];
 }
+
+export interface Version {
+  id: string;
+  timestamp: string;
+  name?: string; // Only for manual versions
+}
+
+export interface CloudVersions {
+    manual: Version[];
+    automatic: Version[];
+}

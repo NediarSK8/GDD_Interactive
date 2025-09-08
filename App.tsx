@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
@@ -11,13 +12,18 @@ import { AdvancedQueryWidget } from './components/AdvancedQueryWidget';
 import { AiInsightModal } from './components/AiInsightModal';
 import { ImageGenerationModal } from './components/ImageGenerationModal';
 import { UploadModal } from './components/UploadModal';
-import { Document, ContentBlock, GeminiUpdatePayload, ViewMode } from './types';
+import { CloudSyncModal } from './components/CloudSyncModal';
+import { ConfirmationModal } from './components/ConfirmationModal';
+import { SaveVersionModal } from './components/SaveVersionModal';
+import { VersionSelectionModal } from './components/VersionSelectionModal';
+import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions } from './types';
 import { analyzeAndIntegrateIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt } from './services/geminiService';
+import { saveToCloud, getVersions, loadVersion } from './services/cloudSyncService';
 import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
 import { applyChanges, estimateTokens } from './utils/helpers';
-import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon, ChevronUpIcon, ChevronDownIcon } from './assets/icons';
+import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon, ChevronUpIcon, ChevronDownIcon, CloudSyncIcon } from './assets/icons';
 import { encryptData, decryptData } from './utils/crypto';
 
 
@@ -97,6 +103,38 @@ export default function App() {
   const [docSearchResultsCount, setDocSearchResultsCount] = useState(0);
   const [docSearchCurrentIndex, setDocSearchCurrentIndex] = useState(-1);
   
+    const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState(false);
+    const [cloudSyncUrl, setCloudSyncUrl] = useState('');
+    const [cloudSyncKey, setCloudSyncKey] = useState('');
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncStatus, setSyncStatus] = useState<string | null>(null);
+
+    const [confirmationModalState, setConfirmationModalState] = useState<{
+        isOpen: boolean;
+        title: string;
+        message: string;
+        onConfirm: () => void;
+    }>({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => {},
+    });
+    
+    // State for Cloud Versioning
+    const [isSaveVersionModalOpen, setIsSaveVersionModalOpen] = useState(false);
+    const [isVersionSelectionModalOpen, setIsVersionSelectionModalOpen] = useState(false);
+    const [cloudVersions, setCloudVersions] = useState<CloudVersions | null>(null);
+    const [isFetchingVersions, setIsFetchingVersions] = useState(false);
+    const [versionError, setVersionError] = useState<string | null>(null);
+    
+    useEffect(() => {
+        const savedUrl = localStorage.getItem('cloudSyncUrl');
+        const savedKey = localStorage.getItem('cloudSyncKey');
+        if (savedUrl) setCloudSyncUrl(savedUrl);
+        if (savedKey) setCloudSyncKey(savedKey);
+    }, []);
+
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isResizingRef.current) return;
@@ -669,6 +707,92 @@ export default function App() {
     }
   };
 
+  const handleSaveCloudSyncSettings = (url: string, key: string) => {
+      setCloudSyncUrl(url);
+      setCloudSyncKey(key);
+      localStorage.setItem('cloudSyncUrl', url);
+      localStorage.setItem('cloudSyncKey', key);
+      setSyncStatus('Configurações salvas com sucesso!');
+      setTimeout(() => setSyncStatus(null), 3000);
+  };
+
+  const handleCloudUploadClick = () => {
+    if (!cloudSyncUrl || !cloudSyncKey) {
+        setSyncStatus('Erro: URL do Worker ou Chave não configurada.');
+        return;
+    }
+    setIsSaveVersionModalOpen(true);
+  };
+
+  const handleSaveVersion = async (name: string) => {
+    setIsSyncing(true);
+    setSyncStatus('Enviando versão para a nuvem...');
+    setIsSaveVersionModalOpen(false);
+    try {
+        const combinedData = {
+            gdd: documents || [],
+            script: scriptDocuments || [],
+        };
+        const result = await saveToCloud(cloudSyncUrl, cloudSyncKey, name, combinedData);
+        setSyncStatus(`Versão "${result.name}" salva com sucesso!`);
+    } catch (err) {
+        setSyncStatus(err instanceof Error ? `Erro no upload: ${err.message}` : 'Erro desconhecido no upload.');
+    } finally {
+        setIsSyncing(false);
+        setTimeout(() => setSyncStatus(null), 5000);
+    }
+  };
+
+  const handleCloudDownloadClick = async () => {
+    if (!cloudSyncUrl || !cloudSyncKey) {
+        setSyncStatus('Erro: URL do Worker ou Chave não configurada.');
+        return;
+    }
+    
+    setIsFetchingVersions(true);
+    setVersionError(null);
+    setCloudVersions(null);
+    setIsVersionSelectionModalOpen(true);
+
+    try {
+        const versions = await getVersions(cloudSyncUrl, cloudSyncKey);
+        versions.manual.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        versions.automatic.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setCloudVersions(versions);
+    } catch(err) {
+        setVersionError(err instanceof Error ? err.message : 'Erro desconhecido ao buscar versões.');
+    } finally {
+        setIsFetchingVersions(false);
+    }
+  };
+  
+  const handleLoadVersionFromCloud = (versionId: string) => {
+    const performLoad = async () => {
+        setIsVersionSelectionModalOpen(false);
+        setIsSyncing(true);
+        setSyncStatus('Baixando versão da nuvem...');
+        try {
+            const data = await loadVersion(cloudSyncUrl, cloudSyncKey, versionId);
+            setSyncStatus('Dados recebidos. Atualizando documentos...');
+            setDocuments(data.gdd);
+            setScriptDocuments(data.script);
+            setSyncStatus('Dados carregados da nuvem com sucesso!');
+        } catch (err) {
+            setSyncStatus(err instanceof Error ? `Erro no download: ${err.message}` : 'Erro desconhecido no download.');
+        } finally {
+            setIsSyncing(false);
+            setTimeout(() => setSyncStatus(null), 5000);
+        }
+    };
+
+    setConfirmationModalState({
+        isOpen: true,
+        title: 'Confirmar Carregamento de Versão',
+        message: 'Isso substituirá seus documentos locais pelos da versão selecionada na nuvem. Esta ação não pode ser desfeita. Deseja continuar?',
+        onConfirm: performLoad,
+    });
+  };
+
 
   return (
     <div className="flex h-screen font-sans relative">
@@ -815,7 +939,16 @@ export default function App() {
                          </button>
 
                          <hr className="border-gray-600 my-1" />
-
+                         
+                         <button
+                            onClick={() => { setIsCloudSyncModalOpen(true); setIsMenuOpen(false); }}
+                            className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
+                            title="Configurar e usar a sincronização na nuvem"
+                         >
+                            <CloudSyncIcon />
+                            <span className="ml-3">Sincronização na Nuvem</span>
+                         </button>
+                         
                          <button
                             onClick={() => { handleGoogleAuthClick(); setIsMenuOpen(false); }}
                             disabled={!!googleAccessToken}
@@ -912,6 +1045,41 @@ export default function App() {
         isOpen={isInsightModalOpen}
         onClose={() => setIsInsightModalOpen(false)}
         insight={lastAiInsight}
+      />
+      <CloudSyncModal
+        isOpen={isCloudSyncModalOpen}
+        onClose={() => setIsCloudSyncModalOpen(false)}
+        initialUrl={cloudSyncUrl}
+        initialKey={cloudSyncKey}
+        onSaveSettings={handleSaveCloudSyncSettings}
+        onUploadClick={handleCloudUploadClick}
+        onDownloadClick={handleCloudDownloadClick}
+        isSyncing={isSyncing}
+        syncStatus={syncStatus}
+      />
+       <SaveVersionModal
+        isOpen={isSaveVersionModalOpen}
+        onClose={() => setIsSaveVersionModalOpen(false)}
+        onSave={handleSaveVersion}
+        isSaving={isSyncing}
+      />
+      <VersionSelectionModal
+        isOpen={isVersionSelectionModalOpen}
+        onClose={() => setIsVersionSelectionModalOpen(false)}
+        onLoadVersion={handleLoadVersionFromCloud}
+        versions={cloudVersions}
+        isLoading={isFetchingVersions}
+        error={versionError}
+      />
+      <ConfirmationModal
+        isOpen={confirmationModalState.isOpen}
+        onClose={() => setConfirmationModalState({ ...confirmationModalState, isOpen: false })}
+        onConfirm={() => {
+            confirmationModalState.onConfirm();
+            setConfirmationModalState({ ...confirmationModalState, isOpen: false });
+        }}
+        title={confirmationModalState.title}
+        message={confirmationModalState.message}
       />
       <AdvancedQueryWidget
         isOpen={isQueryWidgetOpen}
