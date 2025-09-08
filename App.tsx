@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
@@ -16,9 +18,10 @@ import { CloudSyncModal } from './components/CloudSyncModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { SaveVersionModal } from './components/SaveVersionModal';
 import { VersionSelectionModal } from './components/VersionSelectionModal';
-import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions } from './types';
+import { UpdateNotificationModal } from './components/UpdateNotificationModal';
+import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions, Version } from './types';
 import { analyzeAndIntegrateIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt } from './services/geminiService';
-import { saveToCloud, getVersions, loadVersion } from './services/cloudSyncService';
+import { saveToCloud, getVersions, loadVersion, getLatestVersionMeta } from './services/cloudSyncService';
 import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
@@ -46,6 +49,8 @@ interface ChatMessage {
     role: 'user' | 'model';
     text: string;
 }
+
+const LOCAL_VERSION_META_KEY = 'currentCloudVersionMeta';
 
 export default function App() {
   const {
@@ -108,6 +113,7 @@ export default function App() {
     const [cloudSyncKey, setCloudSyncKey] = useState('');
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncStatus, setSyncStatus] = useState<string | null>(null);
+    const [isCloudSyncModalClosable, setIsCloudSyncModalClosable] = useState(true);
 
     const [confirmationModalState, setConfirmationModalState] = useState<{
         isOpen: boolean;
@@ -127,13 +133,52 @@ export default function App() {
     const [cloudVersions, setCloudVersions] = useState<CloudVersions | null>(null);
     const [isFetchingVersions, setIsFetchingVersions] = useState(false);
     const [versionError, setVersionError] = useState<string | null>(null);
+    const [updateAvailable, setUpdateAvailable] = useState<Version | null>(null);
     
     useEffect(() => {
-        const savedUrl = localStorage.getItem('cloudSyncUrl');
-        const savedKey = localStorage.getItem('cloudSyncKey');
-        if (savedUrl) setCloudSyncUrl(savedUrl);
-        if (savedKey) setCloudSyncKey(savedKey);
-    }, []);
+        // This effect runs once after the initial data load from the DB is complete.
+        if (!isDBLoading) {
+            const savedUrl = localStorage.getItem('cloudSyncUrl');
+            const savedKey = localStorage.getItem('cloudSyncKey');
+    
+            if (savedUrl && savedKey) {
+                // If they are found, update the state.
+                setCloudSyncUrl(savedUrl);
+                setCloudSyncKey(savedKey);
+            } else {
+                // If credentials are not found, open the modal and make it non-closable
+                setIsCloudSyncModalClosable(false);
+                setIsCloudSyncModalOpen(true);
+            }
+        }
+    }, [isDBLoading]);
+    
+    useEffect(() => {
+        const checkForUpdates = async () => {
+            if (!cloudSyncUrl || !cloudSyncKey) return;
+
+            const localMetaString = localStorage.getItem(LOCAL_VERSION_META_KEY);
+            // Don't check if we've never synced or just uploaded a local file
+            if (!localMetaString) return; 
+
+            try {
+                const localMeta: Version = JSON.parse(localMetaString);
+                const latestMeta = await getLatestVersionMeta(cloudSyncUrl, cloudSyncKey);
+
+                // If server has a version, and its ID is different, and its timestamp is newer
+                if (latestMeta && latestMeta.id !== localMeta.id && new Date(latestMeta.timestamp) > new Date(localMeta.timestamp)) {
+                    setUpdateAvailable(latestMeta);
+                }
+            } catch (err) {
+                console.error("Failed to check for new versions:", err);
+                // Fail silently, don't disrupt the user with an error for a background check
+            }
+        };
+
+        if (!isDBLoading && !isCloudSyncModalOpen) {
+             checkForUpdates();
+        }
+    }, [cloudSyncUrl, cloudSyncKey, isDBLoading, isCloudSyncModalOpen]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -371,6 +416,9 @@ export default function App() {
             Array.isArray(arr) && arr.every(item => 
                 item && typeof item === 'object' && 'id' in item && 'title' in item && 'category' in item && 'content' in item
             );
+        
+        // Successfully parsed and validated, clear cloud version tracking
+        localStorage.removeItem(LOCAL_VERSION_META_KEY);
 
         if (parsedData && typeof parsedData === 'object' && 'gdd' in parsedData && 'script' in parsedData && !Array.isArray(parsedData)) {
             if (!isDocumentArray(parsedData.gdd) || !isDocumentArray(parsedData.script)) {
@@ -713,6 +761,13 @@ export default function App() {
       localStorage.setItem('cloudSyncUrl', url);
       localStorage.setItem('cloudSyncKey', key);
       setSyncStatus('Configurações salvas com sucesso!');
+      
+      // Close modal if it was opened for initial setup
+      if (!isCloudSyncModalClosable) {
+          setIsCloudSyncModalOpen(false);
+          setIsCloudSyncModalClosable(true);
+      }
+      
       setTimeout(() => setSyncStatus(null), 3000);
   };
 
@@ -735,6 +790,8 @@ export default function App() {
         };
         const result = await saveToCloud(cloudSyncUrl, cloudSyncKey, name, combinedData);
         setSyncStatus(`Versão "${result.name}" salva com sucesso!`);
+        // Store metadata of the newly saved version
+        localStorage.setItem(LOCAL_VERSION_META_KEY, JSON.stringify(result));
     } catch (err) {
         setSyncStatus(err instanceof Error ? `Erro no upload: ${err.message}` : 'Erro desconhecido no upload.');
     } finally {
@@ -766,7 +823,7 @@ export default function App() {
     }
   };
   
-  const handleLoadVersionFromCloud = (versionId: string) => {
+  const handleLoadVersionFromCloud = (versionId: string, versionMeta?: Version) => {
     const performLoad = async () => {
         setIsVersionSelectionModalOpen(false);
         setIsSyncing(true);
@@ -776,6 +833,17 @@ export default function App() {
             setSyncStatus('Dados recebidos. Atualizando documentos...');
             setDocuments(data.gdd);
             setScriptDocuments(data.script);
+            
+            let loadedVersionMeta = versionMeta; // Use provided meta if available
+            if (!loadedVersionMeta && cloudVersions) { // Fallback to searching the list
+                const allVersions = [...cloudVersions.manual, ...cloudVersions.automatic];
+                loadedVersionMeta = allVersions.find(v => v.id === versionId);
+            }
+
+            if (loadedVersionMeta) {
+                localStorage.setItem(LOCAL_VERSION_META_KEY, JSON.stringify(loadedVersionMeta));
+            }
+            
             setSyncStatus('Dados carregados da nuvem com sucesso!');
         } catch (err) {
             setSyncStatus(err instanceof Error ? `Erro no download: ${err.message}` : 'Erro desconhecido no download.');
@@ -941,7 +1009,11 @@ export default function App() {
                          <hr className="border-gray-600 my-1" />
                          
                          <button
-                            onClick={() => { setIsCloudSyncModalOpen(true); setIsMenuOpen(false); }}
+                            onClick={() => { 
+                                setIsCloudSyncModalClosable(true); 
+                                setIsCloudSyncModalOpen(true); 
+                                setIsMenuOpen(false); 
+                            }}
                             className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left"
                             title="Configurar e usar a sincronização na nuvem"
                          >
@@ -1049,6 +1121,7 @@ export default function App() {
       <CloudSyncModal
         isOpen={isCloudSyncModalOpen}
         onClose={() => setIsCloudSyncModalOpen(false)}
+        isClosable={isCloudSyncModalClosable}
         initialUrl={cloudSyncUrl}
         initialKey={cloudSyncKey}
         onSaveSettings={handleSaveCloudSyncSettings}
@@ -1080,6 +1153,17 @@ export default function App() {
         }}
         title={confirmationModalState.title}
         message={confirmationModalState.message}
+      />
+       <UpdateNotificationModal
+        isOpen={!!updateAvailable}
+        onClose={() => setUpdateAvailable(null)}
+        onConfirm={() => {
+            if (updateAvailable) {
+                handleLoadVersionFromCloud(updateAvailable.id, updateAvailable);
+            }
+            setUpdateAvailable(null);
+        }}
+        latestVersion={updateAvailable}
       />
       <AdvancedQueryWidget
         isOpen={isQueryWidgetOpen}

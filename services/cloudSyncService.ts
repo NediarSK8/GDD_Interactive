@@ -174,3 +174,38 @@ export async function loadVersion(url: string, accessKey: string, versionId: str
         throw new Error(`Falha na comunicação com o servidor: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     }
 }
+
+export async function getLatestVersionMeta(url: string, accessKey: string): Promise<Version | null> {
+    const sanitizedUrl = url.replace(/\/$/, '');
+    try {
+        const response = await fetch(`${sanitizedUrl}/versions/latest/meta`, {
+            method: 'GET',
+            headers: {
+                'X-Access-Key': accessKey,
+            },
+        });
+
+        if (response.status === 404) {
+            // No versions found on the server, which is not an error.
+            return null;
+        }
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Erro do servidor: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+
+        if (!data || !data.id || !data.timestamp) {
+            throw new Error("Metadados da versão mais recente recebidos em formato inválido.");
+        }
+
+        return data as Version;
+
+    } catch (error) {
+        console.error("Falha ao buscar metadados da versão mais recente:", error);
+        // Re-throw to be handled by the caller, as it's an actual network/parse error
+        throw new Error(`Falha na comunicação com o servidor: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    }
+}

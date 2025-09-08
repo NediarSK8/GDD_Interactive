@@ -4,6 +4,7 @@ import { CloudSyncIcon } from '../assets/icons';
 interface CloudSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isClosable?: boolean;
   initialUrl: string;
   initialKey: string;
   onSaveSettings: (url: string, key: string) => void;
@@ -16,6 +17,7 @@ interface CloudSyncModalProps {
 export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   isOpen,
   onClose,
+  isClosable = true,
   initialUrl,
   initialKey,
   onSaveSettings,
@@ -35,22 +37,39 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   const handleSave = () => {
     onSaveSettings(url, key);
   };
+  
+  const handleClose = () => {
+    if (isClosable) {
+      onClose();
+    }
+  };
 
   const hasCredentials = url && key;
   const statusIsError = syncStatus && (syncStatus.toLowerCase().includes('erro') || syncStatus.toLowerCase().includes('falha'));
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 transition-opacity animate-fade-in" onClick={onClose}>
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 transition-opacity animate-fade-in" onClick={handleClose}>
       <div className="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-xl transform transition-all animate-dropdown" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-white flex items-center">
                 <CloudSyncIcon />
                 <span className="ml-3">Sincronização na Nuvem</span>
             </h2>
-            <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
+            <button 
+                onClick={handleClose} 
+                className="text-gray-400 hover:text-white text-3xl leading-none disabled:text-gray-600 disabled:cursor-not-allowed"
+                disabled={!isClosable}
+            >
+                &times;
+            </button>
         </div>
         
         <div className="space-y-6">
+            {!isClosable && (
+                <div className="p-3 bg-yellow-900/40 border border-yellow-700 rounded-md text-sm text-yellow-300">
+                    <p>Por favor, insira e salve suas credenciais de sincronização na nuvem para começar a usar a aplicação.</p>
+                </div>
+            )}
             <div>
                 <h3 className="text-lg font-semibold text-gray-200 mb-2">Configuração</h3>
                 <p className="text-sm text-gray-400 mb-4">Insira os detalhes do seu Worker Cloudflare e a chave de acesso para ativar a sincronização. As informações serão salvas localmente no seu navegador.</p>
