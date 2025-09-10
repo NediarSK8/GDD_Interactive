@@ -30,7 +30,7 @@ function dataURLtoBlob(dataurl: string): Blob {
 }
 
 
-export async function saveToCloud(url: string, adminKey: string, versionName: string, data: CloudData): Promise<Version> {
+export async function saveVersionToCloud(url: string, adminKey: string, data: CloudData, options: { type: 'manual' | 'automatic', name?: string }): Promise<Version> {
     const sanitizedUrl = url.replace(/\/$/, '');
 
     // 1. Deep clone the data to avoid mutating the application's state directly.
@@ -98,9 +98,9 @@ export async function saveToCloud(url: string, adminKey: string, versionName: st
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                type: 'manual',
-                name: versionName,
-                gddData: dataToProcess // Send the processed data with image URLs
+                type: options.type,
+                name: options.name,
+                gddData: dataToProcess
             }),
         });
 

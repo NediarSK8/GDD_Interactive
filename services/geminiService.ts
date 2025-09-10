@@ -140,11 +140,100 @@ const updatePayloadSchema = {
     required: ['newDocuments', 'updatedDocuments', 'deletedDocumentIds', 'summary', 'thinkingProcess']
 };
 
+/**
+ * Chama a API Gemini com uma lógica de repetição para lidar com JSONs incompletos.
+ */
+async function callGeminiWithRetryForUpdates(
+    initialPrompt: string,
+    config: any,
+    onProgress: (tokens: number) => void,
+    onStatusUpdate: (message: string) => void
+): Promise<{ payload: GeminiUpdatePayload; rawJson: string }> {
+
+    const executeStream = async (prompt: string, initialTokenCount: number = 0) => {
+        const responseStream = await ai.models.generateContentStream({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: config,
+        });
+
+        let accumulatedText = "";
+        for await (const chunk of responseStream) {
+            if (chunk.text) {
+                accumulatedText += chunk.text;
+                onProgress(initialTokenCount + estimateTokens(accumulatedText));
+            }
+        }
+        return accumulatedText; // Não usar trim() para não remover espaços que podem ser necessários na concatenação
+    };
+
+    // Primeira Tentativa
+    let jsonText = await executeStream(initialPrompt);
+
+    try {
+        let parsedResponse = JSON.parse(jsonText) as GeminiUpdatePayload;
+        if (!parsedResponse.newDocuments || !parsedResponse.updatedDocuments || !parsedResponse.deletedDocumentIds || !parsedResponse.summary || !parsedResponse.thinkingProcess) {
+            throw new Error("A resposta da IA está faltando campos obrigatórios.");
+        }
+        parsedResponse = sanitizeGeminiResponse(parsedResponse);
+        return { payload: parsedResponse, rawJson: jsonText };
+    } catch (error) {
+        console.warn("Falha ao analisar o JSON da primeira tentativa, tentando continuar.", { error, partialJson: jsonText });
+        
+        onStatusUpdate('A resposta da IA foi longa e foi cortada. Solicitando a continuação para completar a tarefa...');
+
+        // Extrai o processo de raciocínio parcial para fornecer como contexto na próxima chamada
+        let thinkingProcessContext = "Nenhum processo de raciocínio foi capturado na resposta parcial.";
+        try {
+            const thinkingMatch = jsonText.match(/"thinkingProcess"\s*:\s*\[\s*([^\]]*)/);
+            if (thinkingMatch && thinkingMatch[1]) {
+                const completeStrings = thinkingMatch[1].match(/"(.*?)"/g);
+                if (completeStrings) {
+                    thinkingProcessContext = completeStrings.map(s => ` - ${JSON.parse(s)}`).join('\n');
+                }
+            }
+        } catch (e) { console.error("Não foi possível extrair o processo de raciocínio.", e); }
+
+        // Constrói o prompt para a nova tentativa, incluindo todo o contexto anterior, como solicitado.
+        const retryPrompt = `${initialPrompt}
+
+---
+CONTEXTO DA SUA TENTATIVA ANTERIOR (que foi interrompida):
+Seu processo de raciocínio parcial foi:
+${thinkingProcessContext}
+
+Sua resposta JSON parcial foi:
+${jsonText}
+---
+
+Continue o que estava fazendo.`;
+        
+        const initialTokensForRetry = estimateTokens(jsonText);
+        const continuationText = await executeStream(retryPrompt, initialTokensForRetry);
+        
+        const combinedJsonText = jsonText + continuationText;
+        
+        try {
+            let parsedResponse = JSON.parse(combinedJsonText) as GeminiUpdatePayload;
+             if (!parsedResponse.newDocuments || !parsedResponse.updatedDocuments || !parsedResponse.deletedDocumentIds || !parsedResponse.summary || !parsedResponse.thinkingProcess) {
+                throw new Error("A resposta da IA na segunda tentativa também está faltando campos obrigatórios.");
+            }
+            console.log("Continuação bem-sucedida! JSON combinado analisado com sucesso.");
+            parsedResponse = sanitizeGeminiResponse(parsedResponse);
+            return { payload: parsedResponse, rawJson: combinedJsonText };
+        } catch (retryError) {
+             console.error("Falha ao analisar o JSON mesmo após a continuação.", { retryError, finalJson: combinedJsonText });
+             throw new Error("Falha ao obter uma resposta JSON válida da IA, mesmo após uma nova tentativa. A resposta combinada era inválida. Por favor, tente simplificar sua instrução.");
+        }
+    }
+}
+
 export async function analyzeAndIntegrateIdea(
     idea: string,
     documents: Document[],
     contextType: ContextType,
     onProgress: (tokens: number) => void,
+    onStatusUpdate: (message: string) => void,
     config: { maxOutputTokens: number; thinkingBudget: number }
 ): Promise<{ payload: GeminiUpdatePayload; rawJson: string }> {
   const sanitizedDocuments = sanitizeDocumentsForAI(documents);
@@ -155,19 +244,20 @@ export async function analyzeAndIntegrateIdea(
 
   const prompt = `
     ${promptContext}
-    Sua tarefa é integrar de forma inteligente uma nova ideia/texto fornecida por um usuário na estrutura do documento existente.
-    Você tem o contexto completo do documento atual. Você DEVE realizar uma atualização abrangente para incorporar a nova ideia da forma mais coesa e inteligente possível.
+    Sua tarefa é integrar de forma inteligente e focada uma nova ideia/texto fornecida por um usuário na estrutura do documento existente.
+    O objetivo principal é manter cada documento coeso e focado em seu próprio assunto, evitando a saturação de links e informações tangenciais.
 
     **REGRAS CRÍTicas:**
-    1.  **Integração Completa:** Analise a ideia do usuário e determine TODAS as alterações necessárias no documento. Isso pode envolver criar documentos, atualizar documentos existentes ou movê-los.
-    2.  **Edições Focadas:** Faça apenas as alterações estritamente necessárias. Se uma ideia afeta apenas uma frase em um parágrafo, modifique apenas essa frase e mantenha o restante do parágrafo. Se a ideia é renomear um documento, altere apenas seu título e atualize os links para ele; não modifique seu conteúdo desnecessariamente. NÃO reescreva partes de um documento que não foram afetadas pela ideia.
-    3.  **Formato de Saída:** Sua resposta DEVE ser um único objeto JSON com as chaves especificadas no esquema.
-    4.  **Raciocínio (thinkingProcess):** Forneça uma lista passo a passo descrevendo seu raciocínio. Explique por que você está criando, atualizando ou excluindo documentos com base na ideia do usuário. Seja claro e conciso. Este campo é OBRIGATÓRIO.
-    5.  **Preservar IDs:** Você DEVE preservar o 'id' dos documentos e blocos de imagem existentes.
-    6.  **Novos IDs:** Para novos documentos, gere um ID único usando o timestamp atual como uma string (ex: "${Date.now()}").
-    7.  **Links Internos:** Mantenha e atualize meticulosamente todos os links internos. Use o formato [[Título do Documento]] para vincular a um documento. Para vincular a um título específico dentro de um documento, use o formato [[Título do Documento#Texto do Título]]. Se você renomear um documento ou um título, atualize TODOS os links que apontam para ele em todo o GDD/Roteiro. Links de imagem usam [[img:id-da-imagem]].
-    8.  **Idioma:** Toda a sua saída (títulos, conteúdo, resumo) DEVE ESTAR EM PORTUGÊS BRASILEIRO.
-    9.  **Estrutura do Conteúdo:** Adira à estrutura de blocos de conteúdo.
+    1.  **Princípio do Foco do Documento:** Cada documento deve ter um propósito claro e se concentrar em seu próprio tópico. Não adicione detalhes extensos sobre um conceito se ele já tiver seu próprio documento dedicado. A integração deve ocorrer no local mais apropriado.
+    2.  **Integração Direta:** Analise a ideia do usuário e determine o melhor local para integrá-la. Isso pode significar criar um novo documento para uma nova mecânica ou adicionar um parágrafo a um documento existente.
+    3.  **Links Internos com Moderação:** Ao adicionar conteúdo, crie um link para outro documento (usando [[Título do Documento]]) SOMENTE se a referência for **essencial e direta** para a compreensão do texto atual. Evite links para documentos com relação apenas indireta. NÃO sature o texto com links; a clareza é mais importante que a interconexão exaustiva. Se você renomear um documento, atualize os links existentes para ele.
+    4.  **Edições Precisas:** Faça apenas as alterações estritamente necessárias. NÃO reescreva partes de um documento que não foram afetadas pela ideia. Modifique apenas o texto relevante para incorporar a nova ideia.
+    5.  **Formato de Saída:** Sua resposta DEVE ser um único objeto JSON com as chaves especificadas no esquema.
+    6.  **Raciocínio (thinkingProcess):** Forneça uma lista passo a passo descrevendo seu raciocínio. Explique por que você está criando ou atualizando documentos específicos, justificando a relevância da alteração para aquele documento. Este campo é OBRIGATÓRIO.
+    7.  **Preservar IDs:** Você DEVE preservar o 'id' dos documentos e blocos de imagem existentes.
+    8.  **Novos IDs:** Para novos documentos, gere um ID único usando o timestamp atual como uma string (ex: "${Date.now()}").
+    9.  **Idioma:** Toda a sua saída (títulos, conteúdo, resumo) DEVE ESTAR EM PORTUGUÊS BRASILEIRO.
+    10. **Estrutura do Conteúdo:** Adira à estrutura de blocos de conteúdo.
 
     **Novos Blocos de Conteúdo:**
     - **Blockquote (\`blockquote\`):** Use para citações, diálogos, ou para destacar um parágrafo que necessita de ênfase especial, separando-o visualmente do texto principal.
@@ -183,42 +273,21 @@ export async function analyzeAndIntegrateIdea(
     ${idea}
     ---
 
-    Agora, execute a integração e retorne APENAS AS ALTERAÇÕES no formato JSON especificado.
+    Agora, execute a integração focada e retorne APENAS AS ALTERAÇÕES no formato JSON especificado.
   `;
 
+  const geminiConfig = {
+      responseMimeType: "application/json",
+      responseSchema: updatePayloadSchema,
+      maxOutputTokens: config.maxOutputTokens,
+      thinkingConfig: { thinkingBudget: config.thinkingBudget },
+  };
+
   try {
-    const responseStream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: updatePayloadSchema,
-        maxOutputTokens: config.maxOutputTokens,
-        thinkingConfig: { thinkingBudget: config.thinkingBudget },
-      },
-    });
-    
-    let accumulatedText = "";
-    for await (const chunk of responseStream) {
-        if (chunk.text) {
-            accumulatedText += chunk.text;
-            onProgress(estimateTokens(accumulatedText));
-        }
-    }
-    const jsonText = accumulatedText.trim();
-    let parsedResponse = JSON.parse(jsonText) as GeminiUpdatePayload;
-
-    if (!parsedResponse.newDocuments || !parsedResponse.updatedDocuments || !parsedResponse.deletedDocumentIds || !parsedResponse.summary || !parsedResponse.thinkingProcess) {
-        throw new Error("A resposta da IA está faltando campos obrigatórios.");
-    }
-    
-    parsedResponse = sanitizeGeminiResponse(parsedResponse);
-
-    return { payload: parsedResponse, rawJson: jsonText };
-
+    return await callGeminiWithRetryForUpdates(prompt, geminiConfig, onProgress, onStatusUpdate);
   } catch (error) {
-    console.error("Erro ao chamar a API Gemini para integração de ideia:", error);
-    throw new Error("Falha ao obter uma resposta válida da IA. A ideia pode ser muito complexa ou o serviço pode estar indisponível.");
+    console.error("Erro final ao chamar a API Gemini para integração de ideia:", error);
+    throw new Error(error instanceof Error ? error.message : "Falha ao obter uma resposta válida da IA.");
   }
 }
 
@@ -299,6 +368,7 @@ export async function updateDocumentsWithInstruction(
     documents: Document[], 
     contextType: ContextType,
     onProgress: (tokens: number) => void,
+    onStatusUpdate: (message: string) => void,
     config: { maxOutputTokens: number; thinkingBudget: number }
 ): Promise<{ payload: GeminiUpdatePayload; rawJson: string }> {
     const contextName = contextType === 'GDD' ? 'Documento de Design de Jogo (GDD)' : 'Roteiro de Jogo';
@@ -336,39 +406,18 @@ export async function updateDocumentsWithInstruction(
     Agora, execute as atualizações solicitadas e retorne APENAS AS ALTERAÇÕES no formato JSON especificado.
   `;
 
+    const geminiConfig = {
+        responseMimeType: "application/json",
+        responseSchema: updatePayloadSchema,
+        maxOutputTokens: config.maxOutputTokens,
+        thinkingConfig: { thinkingBudget: config.thinkingBudget },
+    };
+
     try {
-        const responseStream = await ai.models.generateContentStream({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: updatePayloadSchema,
-                maxOutputTokens: config.maxOutputTokens,
-                thinkingConfig: { thinkingBudget: config.thinkingBudget },
-            }
-        });
-
-        let accumulatedText = "";
-        for await (const chunk of responseStream) {
-            if (chunk.text) {
-                accumulatedText += chunk.text;
-                onProgress(estimateTokens(accumulatedText));
-            }
-        }
-        const jsonText = accumulatedText.trim();
-        let parsedResponse = JSON.parse(jsonText) as GeminiUpdatePayload;
-
-        if (!parsedResponse.newDocuments || !parsedResponse.updatedDocuments || !parsedResponse.deletedDocumentIds || !parsedResponse.summary || !parsedResponse.thinkingProcess) {
-            throw new Error("A resposta da IA está faltando campos obrigatórios.");
-        }
-        
-        parsedResponse = sanitizeGeminiResponse(parsedResponse);
-
-        return { payload: parsedResponse, rawJson: jsonText };
-
+        return await callGeminiWithRetryForUpdates(prompt, geminiConfig, onProgress, onStatusUpdate);
     } catch (error) {
-        console.error("Erro ao chamar a API Gemini para atualização global:", error);
-        throw new Error("Falha ao obter uma resposta válida da IA para a atualização global. A instrução pode ser muito complexa ou o serviço pode estar indisponível.");
+        console.error("Erro final ao chamar a API Gemini para atualização global:", error);
+        throw new Error(error instanceof Error ? error.message : "Falha ao obter uma resposta válida da IA.");
     }
 }
 
