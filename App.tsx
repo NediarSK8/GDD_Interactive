@@ -1,6 +1,11 @@
 
 
 
+
+
+
+
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
@@ -21,13 +26,14 @@ import { VersionSelectionModal } from './components/VersionSelectionModal';
 import { UpdateNotificationModal } from './components/UpdateNotificationModal';
 import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions, Version } from './types';
 import { analyzeAndIntegrateIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt } from './services/geminiService';
-import { saveToCloud, getVersions, loadVersion, getLatestVersionMeta } from './services/cloudSyncService';
+import { saveVersionToCloud, getVersions, loadVersion, getLatestVersionMeta } from './services/cloudSyncService';
 import { useDocuments } from './hooks/useDocuments';
 import { useGoogleAuth } from './auth/useGoogleAuth';
 import { generateDocxBlob } from './utils/docxGenerator';
 import { applyChanges, estimateTokens } from './utils/helpers';
 import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon, ChevronUpIcon, ChevronDownIcon, CloudSyncIcon } from './assets/icons';
 import { encryptData, decryptData } from './utils/crypto';
+import { INITIAL_DOCUMENTS, INITIAL_SCRIPT_DOCUMENTS } from './constants';
 
 
 interface RefinementModalState {
@@ -135,6 +141,17 @@ export default function App() {
     const [versionError, setVersionError] = useState<string | null>(null);
     const [updateAvailable, setUpdateAvailable] = useState<Version | null>(null);
     
+    const documentsRef = useRef(documents);
+    const scriptDocumentsRef = useRef(scriptDocuments);
+
+    useEffect(() => {
+        documentsRef.current = documents;
+    }, [documents]);
+
+    useEffect(() => {
+        scriptDocumentsRef.current = scriptDocuments;
+    }, [scriptDocuments]);
+
     useEffect(() => {
         // This effect runs once after the initial data load from the DB is complete.
         if (!isDBLoading) {
@@ -277,6 +294,40 @@ export default function App() {
     // Call the original handler to switch documents and clear the sidebar search
     handleSelectSearchResultFromHook(docId, viewMode);
   };
+  
+  const handleAutomaticCloudSave = async (updatedDocs: Document[], updatedViewMode: ViewMode) => {
+    if (!cloudSyncUrl || !cloudSyncKey) {
+        console.log("Cloud sync not configured, skipping automatic save.");
+        return;
+    }
+
+    const gddToSave = updatedViewMode === 'gdd' ? updatedDocs : documentsRef.current;
+    const scriptToSave = updatedViewMode === 'script' ? updatedDocs : scriptDocumentsRef.current;
+
+    if (!gddToSave || !scriptToSave) {
+        console.warn("Skipping auto-save because one of the document sets is not available.");
+        return;
+    }
+
+    setSyncStatus('Salvando backup automático na nuvem...');
+    try {
+        const combinedData = {
+            gdd: gddToSave,
+            script: scriptToSave,
+        };
+        const result = await saveVersionToCloud(cloudSyncUrl, cloudSyncKey, combinedData, { type: 'automatic' });
+        localStorage.setItem(LOCAL_VERSION_META_KEY, JSON.stringify(result));
+        setSyncStatus(`Backup automático salvo com sucesso!`);
+    } catch (err) {
+        const errorMsg = err instanceof Error ? `Falha no backup automático: ${err.message}` : 'Falha no backup automático.';
+        setSyncStatus(errorMsg);
+        console.error(errorMsg, err);
+    } finally {
+        setTimeout(() => {
+            setSyncStatus(prevStatus => (prevStatus?.includes('backup')) ? null : prevStatus);
+        }, 5000);
+    }
+  };
 
   const handleSubmitIdea = async (idea: string, config: { maxOutputTokens: number; thinkingBudget: number }) => {
     setIsIdeaModalOpen(false);
@@ -297,8 +348,12 @@ export default function App() {
         setLoadingState(prev => ({ ...prev, currentTokens: tokens }));
     };
 
+    const onStatusUpdate = (message: string) => {
+        setLoadingState(prev => ({ ...prev, message }));
+    };
+
     try {
-      const { payload: changes, rawJson } = await analyzeAndIntegrateIdea(idea, documentsToUpdate, contextType, onProgress, config);
+      const { payload: changes, rawJson } = await analyzeAndIntegrateIdea(idea, documentsToUpdate, contextType, onProgress, onStatusUpdate, config);
       setLastAiInsight({ ...changes, rawJson });
       
       setLoadingState(prev => ({...prev, message: `Integrando sugestão da IA: ${changes.summary}`}));
@@ -308,6 +363,8 @@ export default function App() {
           finalDocs = applyChanges(prevDocs || [], changes);
           return finalDocs;
       });
+      
+      handleAutomaticCloudSave(finalDocs, viewMode);
       
       const newDocs = changes.newDocuments;
       if (newDocs.length > 0) {
@@ -348,8 +405,12 @@ export default function App() {
         setLoadingState(prev => ({ ...prev, currentTokens: tokens }));
     };
 
+    const onStatusUpdate = (message: string) => {
+        setLoadingState(prev => ({ ...prev, message }));
+    };
+
     try {
-        const { payload: changes, rawJson } = await updateDocumentsWithInstruction(instruction, documentsToUpdate, contextType, onProgress, config);
+        const { payload: changes, rawJson } = await updateDocumentsWithInstruction(instruction, documentsToUpdate, contextType, onProgress, onStatusUpdate, config);
         setLastAiInsight({ ...changes, rawJson });
         
         let finalDocs: Document[] = [];
@@ -357,6 +418,8 @@ export default function App() {
             finalDocs = applyChanges(prevDocs || [], changes);
             return finalDocs;
         });
+
+        handleAutomaticCloudSave(finalDocs, viewMode);
 
         setLoadingState(prev => ({ ...prev, message: changes.summary || 'Documentos atualizados com sucesso!'}));
 
@@ -755,20 +818,46 @@ export default function App() {
     }
   };
 
-  const handleSaveCloudSyncSettings = (url: string, key: string) => {
-      setCloudSyncUrl(url);
-      setCloudSyncKey(key);
-      localStorage.setItem('cloudSyncUrl', url);
-      localStorage.setItem('cloudSyncKey', key);
-      setSyncStatus('Configurações salvas com sucesso!');
-      
-      // Close modal if it was opened for initial setup
-      if (!isCloudSyncModalClosable) {
-          setIsCloudSyncModalOpen(false);
-          setIsCloudSyncModalClosable(true);
-      }
-      
-      setTimeout(() => setSyncStatus(null), 3000);
+  const handleSaveCloudSyncSettings = async (url: string, key: string) => {
+    setCloudSyncUrl(url);
+    setCloudSyncKey(key);
+    localStorage.setItem('cloudSyncUrl', url);
+    localStorage.setItem('cloudSyncKey', key);
+    setSyncStatus('Configurações salvas com sucesso!');
+    
+    const wasInitialSetup = !isCloudSyncModalClosable;
+
+    if (wasInitialSetup) {
+        setIsCloudSyncModalOpen(false);
+        setIsCloudSyncModalClosable(true);
+
+        const isDefaultGdd = JSON.stringify(documentsRef.current) === JSON.stringify(INITIAL_DOCUMENTS);
+        const isDefaultScript = JSON.stringify(scriptDocumentsRef.current) === JSON.stringify(INITIAL_SCRIPT_DOCUMENTS);
+
+        if (isDefaultGdd && isDefaultScript) {
+            setLoadingState({ isLoading: true, message: 'Buscando a versão mais recente da nuvem...', currentTokens: 0, estimatedTokens: 0 });
+            try {
+                const latestMeta = await getLatestVersionMeta(url, key);
+                if (latestMeta) {
+                    setLoadingState(prev => ({ ...prev, message: 'Baixando a versão mais recente...' }));
+                    const data = await loadVersion(url, key, latestMeta.id);
+                    setDocuments(data.gdd);
+                    setScriptDocuments(data.script);
+                    localStorage.setItem(LOCAL_VERSION_META_KEY, JSON.stringify(latestMeta));
+                    setLoadingState(prev => ({ ...prev, message: 'Versão mais recente carregada com sucesso!' }));
+                } else {
+                     setLoadingState(prev => ({ ...prev, message: 'Nenhuma versão encontrada na nuvem. Mantendo documentos padrão.' }));
+                }
+            } catch (err) {
+                console.error("Falha ao buscar automaticamente a versão mais recente:", err);
+                setAppError(err instanceof Error ? err.message : "Não foi possível carregar a versão mais recente da nuvem.");
+            } finally {
+                setTimeout(() => setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 }), 1500);
+            }
+        }
+    }
+    
+    setTimeout(() => setSyncStatus(null), 3000);
   };
 
   const handleCloudUploadClick = () => {
@@ -788,7 +877,7 @@ export default function App() {
             gdd: documents || [],
             script: scriptDocuments || [],
         };
-        const result = await saveToCloud(cloudSyncUrl, cloudSyncKey, name, combinedData);
+        const result = await saveVersionToCloud(cloudSyncUrl, cloudSyncKey, combinedData, { type: 'manual', name });
         setSyncStatus(`Versão "${result.name}" salva com sucesso!`);
         // Store metadata of the newly saved version
         localStorage.setItem(LOCAL_VERSION_META_KEY, JSON.stringify(result));
@@ -1048,10 +1137,10 @@ export default function App() {
          </header>
 
          {appError && (
-            <div className="m-4 p-4 bg-red-800/50 border border-red-600 text-red-200 rounded-md">
+            <div className="m-4 p-4 bg-red-800/50 border border-red-600 text-red-200 rounded-md relative animate-fade-in">
                 <h3 className="font-bold">Ocorreu um Erro</h3>
                 <p>{appError}</p>
-                <button onClick={() => setAppError(null)} className="absolute top-2 right-2 text-red-200 hover:text-white">&times;</button>
+                <button onClick={() => setAppError(null)} className="absolute top-2 right-2 text-red-200 hover:text-white p-1">&times;</button>
             </div>
          )}
 
