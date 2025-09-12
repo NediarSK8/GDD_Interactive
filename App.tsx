@@ -2,6 +2,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
@@ -812,7 +814,7 @@ export default function App() {
       if (!targetDoc) return;
 
       const references: Reference[] = [];
-      const linkRegex = new RegExp(`(\\[\\[${targetDoc.title.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\]\\[)`);
+      const linkRegex = new RegExp(`(\\[\\[${targetDoc.title.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\]\\])`);
 
       const highlight = (text: string) => {
           return text.split(linkRegex).map((part, i) =>
@@ -825,7 +827,7 @@ export default function App() {
 
           doc.content.forEach(block => {
               let texts: string[] = [];
-              if ((block.type === 'heading' || block.type === 'paragraph') && block.text) {
+              if ((block.type === 'heading' || block.type === 'paragraph' || block.type === 'blockquote') && block.text) {
                   texts.push(block.text);
               } else if (block.type === 'list' && block.items) {
                   texts.push(...block.items.filter(Boolean));
