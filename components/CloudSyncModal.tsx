@@ -11,7 +11,6 @@ interface CloudSyncModalProps {
   onUploadClick: () => void;
   onDownloadClick: () => void;
   isSyncing: boolean;
-  syncStatus: string | null;
 }
 
 export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
@@ -24,7 +23,6 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   onUploadClick,
   onDownloadClick,
   isSyncing,
-  syncStatus,
 }) => {
   const [url, setUrl] = useState(initialUrl);
   const [key, setKey] = useState(initialKey);
@@ -45,7 +43,6 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   };
 
   const hasCredentials = url && key;
-  const statusIsError = syncStatus && (syncStatus.toLowerCase().includes('erro') || syncStatus.toLowerCase().includes('falha'));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 transition-opacity animate-fade-in" onClick={handleClose}>
@@ -142,11 +139,6 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
                     </button>
                  </div>
                  {!hasCredentials && <p className="text-xs text-yellow-500 mt-2 text-center">Salve a URL e a Chave para ativar as ações de sincronização.</p>}
-                 {syncStatus && (
-                    <p className={`text-sm text-center mt-4 p-2 rounded-md ${statusIsError ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'}`}>
-                        {syncStatus}
-                    </p>
-                 )}
             </div>
         </div>
       </div>

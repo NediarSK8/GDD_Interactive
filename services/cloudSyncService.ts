@@ -5,6 +5,10 @@ interface CloudData {
     script: Document[];
 }
 
+interface CloudResponseData extends CloudData {
+    secret?: Document[];
+}
+
 /**
  * Converts a data URL string into a Blob object.
  * @param dataurl The data URL to convert.
@@ -30,15 +34,22 @@ function dataURLtoBlob(dataurl: string): Blob {
 }
 
 
-export async function saveVersionToCloud(url: string, adminKey: string, data: CloudData, options: { type: 'manual' | 'automatic', name?: string }): Promise<Version> {
+export async function saveVersionToCloud(
+    url: string, 
+    adminKey: string, 
+    data: CloudData, 
+    secretData: Document[] | null, 
+    options: { type: 'manual' | 'automatic', name?: string }
+): Promise<Version> {
     const sanitizedUrl = url.replace(/\/$/, '');
 
     // 1. Deep clone the data to avoid mutating the application's state directly.
     const dataToProcess: CloudData = JSON.parse(JSON.stringify(data));
+    const secretToProcess = secretData ? JSON.parse(JSON.stringify(secretData)) : null;
 
     // 2. Collect all upload promises for new images (base64).
     const imageUploadPromises: Promise<void>[] = [];
-    const allDocuments = [...dataToProcess.gdd, ...dataToProcess.script];
+    const allDocuments = [...dataToProcess.gdd, ...dataToProcess.script, ...(secretToProcess || [])];
 
     for (const doc of allDocuments) {
         if (!doc.content || !Array.isArray(doc.content)) continue;
@@ -100,7 +111,8 @@ export async function saveVersionToCloud(url: string, adminKey: string, data: Cl
             body: JSON.stringify({
                 type: options.type,
                 name: options.name,
-                gddData: dataToProcess
+                gddData: dataToProcess,
+                secretData: secretToProcess
             }),
         });
 
@@ -146,7 +158,7 @@ export async function getVersions(url: string, accessKey: string): Promise<Cloud
     }
 }
 
-export async function loadVersion(url: string, accessKey: string, versionId: string): Promise<CloudData> {
+export async function loadVersion(url: string, accessKey: string, versionId: string): Promise<CloudResponseData> {
     const sanitizedUrl = url.replace(/\/$/, '');
      try {
         const response = await fetch(`${sanitizedUrl}/versions/${versionId}`, {
@@ -168,7 +180,7 @@ export async function loadVersion(url: string, accessKey: string, versionId: str
             throw new Error("Dados da versão recebidos da nuvem estão em um formato inválido.");
         }
 
-        return data as CloudData;
+        return data as CloudResponseData;
     } catch (error) {
         console.error("Falha ao carregar versão da nuvem:", error);
         throw new Error(`Falha na comunicação com o servidor: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -207,5 +219,83 @@ export async function getLatestVersionMeta(url: string, accessKey: string): Prom
         console.error("Falha ao buscar metadados da versão mais recente:", error);
         // Re-throw to be handled by the caller, as it's an actual network/parse error
         throw new Error(`Falha na comunicação com o servidor: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    }
+}
+
+export async function verifyAdminKey(url: string, key: string): Promise<boolean> {
+    const sanitizedUrl = url.replace(/\/$/, '');
+    try {
+        const response = await fetch(`${sanitizedUrl}/verify-admin`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ key }),
+        });
+
+        if (response.status === 200) {
+            const data = await response.json();
+            return data.valid === true;
+        }
+        
+        // Qualquer outro status significa falha
+        return false;
+
+    } catch (error) {
+        console.error("Falha ao verificar a chave de administrador:", error);
+        // Lança um erro mais amigável
+        throw new Error(`Não foi possível conectar ao servidor para verificar a chave. Verifique a URL do Worker e sua conexão.`);
+    }
+}
+
+/**
+ * Uploads the latest DOCX versions of GDD and Script to the cloud.
+ * These are overwritten on each upload and are not versioned.
+ * @param url The worker URL.
+ * @param adminKey The admin secret key.
+ * @param gddBlob The GDD blob to upload.
+ * @param scriptBlob The Script blob to upload.
+ */
+export async function uploadLatestDocx(
+    url: string,
+    adminKey: string,
+    gddBlob: Blob | null,
+    scriptBlob: Blob | null
+): Promise<void> {
+    const sanitizedUrl = url.replace(/\/$/, '');
+    const formData = new FormData();
+
+    if (gddBlob) {
+        formData.append('gdd_docx', gddBlob, 'GDD.docx');
+    }
+    if (scriptBlob) {
+        formData.append('script_docx', scriptBlob, 'Script.docx');
+    }
+
+    if (!gddBlob && !scriptBlob) {
+        console.log("Nenhum blob .docx para enviar.");
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${sanitizedUrl}/latest-docx`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${adminKey}`,
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Erro do servidor ao salvar .docx: ${response.status} - ${errorText}`);
+        }
+        
+        console.log("Arquivos .docx salvos com sucesso na nuvem.");
+
+    } catch (error) {
+        console.error("Falha ao salvar arquivos .docx na nuvem:", error);
+        // This is a background task, so we log the error but don't re-throw
+        // to avoid interrupting the main user flow.
     }
 }

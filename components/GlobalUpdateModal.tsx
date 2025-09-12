@@ -64,10 +64,10 @@ export const GlobalUpdateModal: React.FC<GlobalUpdateModalProps> = ({ isOpen, on
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             placeholder={placeholderText}
-            className="w-full h-48 p-4 bg-gray-900 border border-gray-700 rounded-md text-gray-200 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition"
+            className="w-full h-48 p-4 bg-gray-900 border border-gray-700 rounded-md text-gray-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
           />
            <div className="mt-4">
-            <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-sm text-purple-400 hover:text-purple-300 focus:outline-none">
+            <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-sm text-indigo-400 hover:text-indigo-300 focus:outline-none">
                 {showAdvanced ? 'Ocultar' : 'Mostrar'} Configurações Avançadas
             </button>
             {showAdvanced && (
@@ -84,7 +84,7 @@ export const GlobalUpdateModal: React.FC<GlobalUpdateModalProps> = ({ isOpen, on
                             step="512"
                             value={maxOutputTokens}
                             onChange={handleMaxOutputTokensChange}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                         />
                         <p className="text-xs text-gray-500 mt-1">Controla o tamanho máximo da resposta da IA. Valores mais altos permitem mudanças mais complexas.</p>
                     </div>
@@ -100,7 +100,7 @@ export const GlobalUpdateModal: React.FC<GlobalUpdateModalProps> = ({ isOpen, on
                             step="256"
                             value={thinkingBudget}
                             onChange={handleThinkingBudgetChange}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                         />
                         <p className="text-xs text-gray-500 mt-1">Reserva tokens para a IA "pensar". Zero desativa o pensamento para respostas mais rápidas, mas de menor qualidade.</p>
                     </div>
@@ -118,7 +118,7 @@ export const GlobalUpdateModal: React.FC<GlobalUpdateModalProps> = ({ isOpen, on
             <button
               type="submit"
               disabled={!instruction.trim()}
-              className="px-6 py-2 rounded-md font-semibold text-white bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-2 rounded-md font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
             >
               Atualizar {contextType}
             </button>

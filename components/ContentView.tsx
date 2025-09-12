@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, ContentBlock, ImageBlock, HeadingBlock, ListBlock, DefinitionListBlock } from '../types';
-import { HeadingLevelIcon, ParagraphIcon, ListIcon, ImageIcon, BlockquoteIcon, AiImageIcon, ChevronUpIcon, ChevronDownIcon } from '../assets/icons';
+import { HeadingLevelIcon, ParagraphIcon, ListIcon, ImageIcon, BlockquoteIcon, AiImageIcon } from '../assets/icons';
 
 interface PopupState {
     top: number;
@@ -69,18 +69,6 @@ const slugify = (text: string) => {
     .replace(/^-+|-+$/g, ''); // remove leading/trailing dashes
 };
 
-const EditButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-    <button
-        onClick={onClick}
-        className="p-1.5 bg-gray-700/60 rounded-md text-gray-300 hover:bg-indigo-600 hover:text-white transition-all"
-        title="Editar texto"
-    >
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-        </svg>
-    </button>
-);
-
 const HeadingLevelButton: React.FC<{ onClick: (e: React.MouseEvent) => void }> = ({ onClick }) => (
     <button
         onClick={onClick}
@@ -127,9 +115,10 @@ const LinkIcon: React.FC = () => (
 export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments, onNavigate, onRefineRequest, onFindReferences, onUpdateBlock, onUpdateBlockContent, onSetContent, scrollToHeading, onDidScrollToHeading, onOpenImageGenerationModal, docSearchQuery, docSearchCurrentIndex, onDocSearchResultsChange }) => {
   const [popupState, setPopupState] = useState<PopupState | null>(null);
   const [headingLevelPopupState, setHeadingLevelPopupState] = useState<HeadingLevelPopupState | null>(null);
-  const [editingBlock, setEditingBlock] = useState<{ blockIndex: number; itemIndex?: number } | null>(null);
+  const [editingBlock, setEditingBlock] = useState<{ blockIndex: number; itemIndex?: number | string } | null>(null);
   const [editText, setEditText] = useState<string>('');
   const contentRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addBlockMenuState, setAddBlockMenuState] = useState<AddBlockMenuState | null>(null);
   const [imageInsertionIndex, setImageInsertionIndex] = useState(0);
@@ -141,6 +130,17 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
     if (!text) return '';
     return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   };
+
+  useEffect(() => {
+    if (editingBlock && textareaRef.current) {
+        const textarea = textareaRef.current;
+        textarea.focus();
+        textarea.select();
+        // Auto-resize logic
+        textarea.style.height = 'auto';
+        textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [editingBlock]);
 
   useEffect(() => {
       if (!docSearchQuery.trim() || !document) {
@@ -301,7 +301,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
     }
   };
 
-  const handleStartEditing = (blockIndex: number, currentText: string, itemIndex?: number) => {
+  const handleStartEditing = (blockIndex: number, currentText: string, itemIndex?: number | string) => {
     setPopupState(null);
     setEditingBlock({ blockIndex, itemIndex });
     setEditText(currentText);
@@ -313,9 +313,43 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
   };
 
   const handleSaveEditing = () => {
-    if (!document || editingBlock === null) return;
-    onUpdateBlock(document.id, editingBlock.blockIndex, editText, editingBlock.itemIndex);
+    if (!document || editingBlock === null) {
+        handleCancelEditing();
+        return;
+    }
+
+    const originalBlock = document.content[editingBlock.blockIndex];
+    let originalText = '';
+
+    if (originalBlock.type === 'list' && typeof editingBlock.itemIndex === 'number') {
+        originalText = (originalBlock.items as string[])[editingBlock.itemIndex];
+    } else if (originalBlock.type === 'heading' || originalBlock.type === 'paragraph' || originalBlock.type === 'blockquote') {
+        originalText = originalBlock.text;
+    } else if (originalBlock.type === 'image') {
+        originalText = originalBlock.caption;
+    }
+    
+    if (editText !== originalText) {
+        const numericItemIndex = typeof editingBlock.itemIndex === 'number' ? editingBlock.itemIndex : undefined;
+        onUpdateBlock(document.id, editingBlock.blockIndex, editText, numericItemIndex);
+    }
     handleCancelEditing();
+  };
+  
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setEditText(e.target.value);
+        e.target.style.height = 'auto'; // Reset height
+        e.target.style.height = `${e.target.scrollHeight}px`; // Set to scroll height
+    };
+    
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCancelEditing();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+         e.preventDefault();
+         handleSaveEditing();
+    }
   };
 
   const handleDeleteBlock = (index: number) => {
@@ -352,26 +386,19 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
         }
 
         let newBlock: ContentBlock | null = null;
-        let textToEdit: string | undefined = undefined;
-        let itemIndexToEdit: number | undefined = undefined;
 
         switch (type) {
             case 'heading':
                 newBlock = { type: 'heading', level: 2, text: 'Novo Título' };
-                textToEdit = newBlock.text;
                 break;
             case 'paragraph':
                 newBlock = { type: 'paragraph', text: 'Novo parágrafo.' };
-                textToEdit = newBlock.text;
                 break;
             case 'list':
-                newBlock = { type: 'list', style: 'unordered', items: ['Item 1', 'Item 2'] };
-                textToEdit = newBlock.items[0];
-                itemIndexToEdit = 0;
+                newBlock = { type: 'list', style: 'unordered', items: ['Item 1'] };
                 break;
             case 'blockquote':
                 newBlock = { type: 'blockquote', text: 'Citação.' };
-                textToEdit = newBlock.text;
                 break;
         }
 
@@ -380,9 +407,14 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
             newContent.splice(index, 0, newBlock);
             onSetContent(document.id, newContent);
             
-            if (textToEdit !== undefined) {
-                 setTimeout(() => handleStartEditing(index, textToEdit, itemIndexToEdit), 50);
-            }
+            // Auto-enter edit mode for the new block
+            setTimeout(() => {
+                if (newBlock?.type === 'list') {
+                     handleStartEditing(index, newBlock.items[0], 0);
+                } else if ('text' in newBlock) {
+                     handleStartEditing(index, newBlock.text);
+                }
+            }, 50);
         }
         setAddBlockMenuState(null);
     };
@@ -554,20 +586,17 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
     return <WelcomeScreen />;
   }
   
-  const EditControls: React.FC = () => (
-    <div className="flex justify-end space-x-2 mt-2">
-        <button onClick={handleCancelEditing} className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500">Cancelar</button>
-        <button onClick={handleSaveEditing} className="px-3 py-1 text-sm rounded bg-indigo-600 hover:bg-indigo-500">Salvar</button>
-    </div>
-  );
-
-  const getHeadingTextareaClass = (level: HeadingBlock['level'] | undefined) => {
+  const getHeadingClass = (level: HeadingBlock['level']) => {
     switch (level) {
-        case 1: return "text-2xl font-bold text-indigo-400";
-        case 2: return "text-xl font-semibold text-gray-200";
-        case 3: return "text-lg font-medium text-gray-300";
-        default: return "text-2xl font-bold text-indigo-400";
+        case 1: return "!text-2xl !font-bold !text-indigo-400 !border-b !border-gray-700 !pb-2";
+        case 2: return "!text-xl !font-semibold !text-gray-200 !mt-8 !mb-2";
+        case 3: return "!text-lg !font-medium !text-gray-300 !mt-6 !mb-1";
+        default: return "!text-2xl !font-bold !text-indigo-400";
     }
+  };
+
+  const getSharedTextareaStyles = () => {
+    return 'w-full bg-transparent border-none focus:ring-0 resize-none p-0 m-0 overflow-hidden font-inherit leading-relaxed';
   };
 
   const AddBlockMenu: React.FC<{
@@ -606,7 +635,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
     };
 
   return (
-    <div className="p-8 lg:p-12 prose prose-invert prose-lg max-w-4xl mx-auto relative" ref={contentRef} onMouseUp={handleMouseUp}>
+    <div className="p-4 md:p-8 lg:p-12 prose prose-invert prose-lg max-w-4xl mx-auto relative" ref={contentRef} onMouseUp={handleMouseUp}>
         <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
         {imagePreview && (
           <div className="fixed z-50 p-1 bg-gray-900 border border-gray-600 rounded-md shadow-lg" style={{ top: imagePreview.top, left: imagePreview.left, pointerEvents: 'none' }}>
@@ -670,56 +699,55 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                     case 'heading': {
                         const isEditing = editingBlock?.blockIndex === index && editingBlock.itemIndex === undefined;
                         const slug = slugify(block.text);
-                        return isEditing ? (
-                            <div className="mt-4 mb-2">
-                                <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className={`w-full p-2 bg-gray-900 border border-gray-600 rounded-md focus:ring-2 focus:ring-indigo-500 ${getHeadingTextareaClass(block.level)}`} rows={1} autoFocus />
-                                <EditControls />
-                            </div>
-                        ) : (
+                        const className = `scroll-mt-24 ${getHeadingClass(block.level)}`;
+                        
+                        return (
                             <div className="group relative">
-                                {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><HeadingLevelButton onClick={(e) => handleOpenHeadingLevelPopup(e, index, block.level)} /><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                {!isEditing && !editingBlock && <div className="absolute top-1/2 -translate-y-1/2 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col space-y-1"><HeadingLevelButton onClick={(e) => handleOpenHeadingLevelPopup(e, index, block.level)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                
                                 {(() => {
-                                    const commonProps = { id: slug, 'data-block-index': index, className: 'scroll-mt-24' };
                                     const children = renderContentText(block.text, index);
+                                    const props = { id: slug, 'data-block-index': index, className, onDoubleClick: () => handleStartEditing(index, block.text), style: { display: isEditing ? 'none' : undefined }};
                                     switch (block.level) {
-                                        case 1: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{children}</h2>;
-                                        case 2: return <h3 {...commonProps} className={`${commonProps.className} text-xl font-semibold text-gray-200 mt-8 mb-2`}>{children}</h3>;
-                                        case 3: return <h4 {...commonProps} className={`${commonProps.className} text-lg font-medium text-gray-300 mt-6 mb-1`}>{children}</h4>;
-                                        default: return <h2 {...commonProps} className={`${commonProps.className} text-indigo-400 border-b border-gray-700 pb-2 text-2xl font-bold`}>{children}</h2>;
+                                        case 1: return <h2 {...props}>{children}</h2>;
+                                        case 2: return <h3 {...props}>{children}</h3>;
+                                        case 3: return <h4 {...props}>{children}</h4>;
+                                        default: return <h2 {...props}>{children}</h2>;
                                     }
                                 })()}
+                                
+                                {isEditing && (
+                                    <textarea ref={textareaRef} value={editText} onChange={handleTextareaChange} onBlur={handleSaveEditing} onKeyDown={handleTextareaKeyDown} className={`${className} ${getSharedTextareaStyles()}`} rows={1} />
+                                )}
                             </div>
                         );
                     }
                     case 'paragraph': {
                         const isEditing = editingBlock?.blockIndex === index && editingBlock.itemIndex === undefined;
-                        return isEditing ? (
-                            <div className="my-4">
-                                <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="w-full p-2 bg-gray-900 border border-gray-600 rounded-md text-gray-200 focus:ring-2 focus:ring-indigo-500 leading-relaxed" rows={Math.max(3, editText.split('\n').length)} autoFocus />
-                                <EditControls />
-                            </div>
-                        ) : (
+                        return (
                             <div className="group relative">
-                                {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
-                                <p data-block-index={index}>
+                                {!isEditing && !editingBlock && <div className="absolute top-1 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col space-y-1"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                <p data-block-index={index} style={{ display: isEditing ? 'none' : undefined }} onDoubleClick={() => handleStartEditing(index, block.text)}>
                                     {renderContentText(block.text, index)}
                                 </p>
+                                {isEditing && (
+                                    <textarea ref={textareaRef} value={editText} onChange={handleTextareaChange} onBlur={handleSaveEditing} onKeyDown={handleTextareaKeyDown} className={getSharedTextareaStyles()} rows={1} />
+                                )}
                             </div>
                         );
                     }
                      case 'blockquote': {
                         const isEditing = editingBlock?.blockIndex === index && editingBlock.itemIndex === undefined;
-                        return isEditing ? (
-                             <div className="my-4">
-                                <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="w-full p-2 bg-gray-900 border border-gray-600 rounded-md text-gray-200 focus:ring-2 focus:ring-indigo-500 leading-relaxed" rows={Math.max(3, editText.split('\n').length)} autoFocus />
-                                <EditControls />
-                            </div>
-                        ) : (
+                        const className = "border-l-4 border-gray-500 pl-4 italic text-gray-400";
+                        return (
                              <div className="group relative">
-                                {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.text)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
-                                <blockquote data-block-index={index} className="border-l-4 border-gray-500 pl-4 italic text-gray-400">
+                                {!isEditing && !editingBlock && <div className="absolute top-1 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col space-y-1"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                <blockquote data-block-index={index} className={className} style={{ display: isEditing ? 'none' : undefined }} onDoubleClick={() => handleStartEditing(index, block.text)}>
                                     {renderContentText(block.text, index)}
                                 </blockquote>
+                                {isEditing && (
+                                    <textarea ref={textareaRef} value={editText} onChange={handleTextareaChange} onBlur={handleSaveEditing} onKeyDown={handleTextareaKeyDown} className={`${className} ${getSharedTextareaStyles()}`} rows={1} />
+                                )}
                             </div>
                         );
                     }
@@ -731,24 +759,15 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                         const ListTag = listBlock.style === 'ordered' ? 'ol' : 'ul';
                         return (
                             <div className="group relative">
-                                {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
-                                {/* A classe `prose` no pai fornece os marcadores de lista (bolinhas/números).
-                                    Adicionamos preenchimento e espaçamento aqui para melhorar a legibilidade, conforme solicitado. */}
+                                {!editingBlock && <div className="absolute top-1 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                 <ListTag data-block-index={index} className="pl-8 space-y-2">
                                     {items.map((item, itemIndex) => {
                                         const isEditing = editingBlock?.blockIndex === index && editingBlock.itemIndex === itemIndex;
                                         return (
-                                            <li key={itemIndex} data-item-index={itemIndex}>
-                                                {isEditing ? (
-                                                    <div className="my-2">
-                                                        <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="w-full p-2 bg-gray-900 border border-gray-600 rounded-md text-gray-200 focus:ring-2 focus:ring-indigo-500" rows={Math.max(1, editText.split('\n').length)} autoFocus />
-                                                        <EditControls />
-                                                    </div>
-                                                ) : (
-                                                    <div className="group/item relative">
-                                                        {!editingBlock && <div className="absolute top-0 -right-8 z-10 opacity-0 group-hover/item:opacity-100 transition-opacity"><EditButton onClick={() => handleStartEditing(index, item, itemIndex)} /></div>}
-                                                        {renderContentText(item, index, itemIndex)}
-                                                    </div>
+                                            <li key={itemIndex} data-item-index={itemIndex} onDoubleClick={() => handleStartEditing(index, item, itemIndex)}>
+                                                <div style={{ display: isEditing ? 'none' : undefined }}>{renderContentText(item, index, itemIndex)}</div>
+                                                {isEditing && (
+                                                    <textarea ref={textareaRef} value={editText} onChange={handleTextareaChange} onBlur={handleSaveEditing} onKeyDown={handleTextareaKeyDown} className={getSharedTextareaStyles()} rows={1} />
                                                 )}
                                             </li>
                                         );
@@ -764,7 +783,7 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                         
                         return (
                             <div className="group relative my-4">
-                                 {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                 {!editingBlock && <div className="absolute top-1 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                 <dl data-block-index={index}>
                                     {items.map((item, itemIndex) => (
                                         <div key={itemIndex} className="mb-2">
@@ -778,19 +797,17 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                     }
                     case 'image': {
                         const isEditing = editingBlock?.blockIndex === index && editingBlock.itemIndex === undefined;
-                        return isEditing ? (
-                            <figure id={block.id} data-block-index={index} className="my-6 not-prose">
-                                <img src={block.src} alt={block.caption} className="w-full rounded-md shadow-lg" />
-                                <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="w-full mt-2 p-2 bg-gray-900 border border-gray-600 rounded-md text-sm text-center italic" autoFocus />
-                                <EditControls />
-                            </figure>
-                        ) : (
+                        const className = "text-center text-sm italic text-gray-400 mt-2";
+                        return (
                              <figure id={block.id} data-block-index={index} className="my-6 not-prose">
                                 <div className="group relative">
-                                    {!editingBlock && <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1"><EditButton onClick={() => handleStartEditing(index, block.caption)} /><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
+                                    {!isEditing && !editingBlock && <div className="absolute top-1 -right-12 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col space-y-1"><DeleteButton onClick={() => handleDeleteBlock(index)}/></div>}
                                     <img src={block.src} alt={block.caption} className="w-full rounded-md shadow-lg" />
                                 </div>
-                                <figcaption className="text-center text-sm italic text-gray-400 mt-2">{renderContentText(block.caption, index)}</figcaption>
+                                <figcaption className={className} style={{ display: isEditing ? 'none' : undefined }} onDoubleClick={() => handleStartEditing(index, block.caption)}>{renderContentText(block.caption, index)}</figcaption>
+                                {isEditing && (
+                                     <textarea ref={textareaRef} value={editText} onChange={handleTextareaChange} onBlur={handleSaveEditing} onKeyDown={handleTextareaKeyDown} className={`${className} ${getSharedTextareaStyles()}`} rows={1} />
+                                )}
                             </figure>
                         )
                     }
@@ -811,6 +828,14 @@ export const ContentView: React.FC<ContentViewProps> = ({ document, allDocuments
                 <AddBlockButton onClick={(e) => handleOpenAddBlockMenu(e, document.content.length)} />
             </div>
         )}
+         <div className="mt-12 text-center">
+            <button
+                onClick={(e) => handleAddBlock('paragraph', document.content.length)}
+                className="text-gray-500 hover:text-indigo-400 transition-colors font-semibold text-sm py-2 px-4 rounded-lg hover:bg-gray-800"
+            >
+                [ + ] Adicionar novo bloco
+            </button>
+         </div>
       </div>
     </div>
   );

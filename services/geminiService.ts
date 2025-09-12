@@ -3,7 +3,7 @@ import { Document, ContentBlock, GeminiUpdatePayload, ImageBlock, ListBlock } fr
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
-type ContextType = 'GDD' | 'Roteiro';
+type ContextType = 'GDD' | 'Roteiro' | 'Secreta';
 
 const sanitizeContentForAI = (content: ContentBlock[]) => {
     return content.map(block => {
@@ -289,6 +289,134 @@ export async function analyzeAndIntegrateIdea(
     console.error("Erro final ao chamar a API Gemini para integração de ideia:", error);
     throw new Error(error instanceof Error ? error.message : "Falha ao obter uma resposta válida da IA.");
   }
+}
+
+export async function analyzeAndIntegrateScriptIdea(
+    idea: string,
+    scriptDocuments: Document[],
+    gddContext: Document[],
+    onProgress: (tokens: number) => void,
+    onStatusUpdate: (message: string) => void,
+    config: { maxOutputTokens: number; thinkingBudget: number }
+): Promise<{ payload: GeminiUpdatePayload; rawJson: string }> {
+    const sanitizedScript = sanitizeDocumentsForAI(scriptDocuments);
+    const sanitizedGdd = sanitizeDocumentsForAI(gddContext);
+
+    const prompt = `
+    Você é um roteirista sênior gerenciando um Roteiro de Jogo cronológico. Você tem acesso de LEITURA ao Game Design Document (GDD) completo para ter contexto.
+    Sua tarefa é integrar de forma inteligente e focada uma nova ideia/texto fornecida por um usuário na estrutura do Roteiro existente.
+
+    **REGRAS CRÍTicas:**
+    1.  **ESCOPO DE MODIFICAÇÃO:** Você SÓ PODE modificar, criar ou deletar documentos do 'Roteiro'. O GDD é apenas para referência e NÃO PODE ser alterado nesta tarefa.
+    2.  **Princípio do Foco do Documento:** Cada documento de roteiro deve ter um propósito claro (uma missão, uma cutscene, etc.). A integração deve ocorrer no local mais apropriado.
+    3.  **SEM Links Novos:** NÃO CRIE novos links internos (usando [[Título do Documento]]) no Roteiro. O roteiro deve ser um documento linear sem links para o GDD. Você pode referenciar conceitos do GDD por nome (ex: 'Amuletos'), mas não crie um link para eles.
+    4.  **Edições Precisas:** Faça apenas as alterações estritamente necessárias. NÃO reescreva partes de um documento que não foram afetadas pela ideia.
+    5.  **Formato de Saída:** Sua resposta DEVE ser um único objeto JSON com as chaves especificadas no esquema, afetando APENAS a coleção de documentos do Roteiro.
+    6.  **Raciocínio (thinkingProcess):** Forneça uma lista passo a passo descrevendo seu raciocínio.
+    7.  **Preservar IDs:** Você DEVE preservar o 'id' dos documentos existentes.
+    8.  **Novos IDs:** Para novos documentos, gere um ID único usando o timestamp (ex: "${Date.now()}").
+    9.  **Idioma:** Toda a sua saída DEVE ESTAR EM PORTUGUÊS BRASILEIRO.
+    10. **Estrutura do Conteúdo:** Adira à estrutura de blocos de conteúdo.
+
+    **Novos Blocos de Conteúdo:**
+    - **Blockquote (\`blockquote\`):** Use para citações, diálogos, ou para destacar um parágrafo que necessita de ênfase especial, separando-o visualmente do texto principal.
+    - **Lista de Definição (\`definition_list\`):** Use para pares de termo-definição. Ideal para explicar mecânicas, atributos, ou glossários. Exemplo: 'Mecânica: [descrição]' deve se tornar um item em uma lista de definição.
+
+    **CONTEXTO DE LEITURA - GDD:**
+    ---
+    ${JSON.stringify(sanitizedGdd, null, 2)}
+    ---
+
+    **DOCUMENTOS DO ROTEIRO (Seu escopo de trabalho):**
+    ---
+    ${JSON.stringify(sanitizedScript, null, 2)}
+    ---
+
+    **NOVA IDEIA PARA INTEGRAR:**
+    ---
+    ${idea}
+    ---
+
+    Agora, execute a integração focada no Roteiro e retorne APENAS AS ALTERAÇÕES no formato JSON especificado.
+  `;
+
+    const geminiConfig = {
+        responseMimeType: "application/json",
+        responseSchema: updatePayloadSchema,
+        maxOutputTokens: config.maxOutputTokens,
+        thinkingConfig: { thinkingBudget: config.thinkingBudget },
+    };
+
+    try {
+        return await callGeminiWithRetryForUpdates(prompt, geminiConfig, onProgress, onStatusUpdate);
+    } catch (error) {
+        console.error("Erro final ao chamar a API Gemini para a ideia de roteiro:", error);
+        throw new Error(error instanceof Error ? error.message : "Falha ao obter uma resposta válida da IA.");
+    }
+}
+
+export async function analyzeAndIntegrateSecretIdea(
+    idea: string,
+    secretDocuments: Document[],
+    gddContext: Document[],
+    scriptContext: Document[],
+    onProgress: (tokens: number) => void,
+    onStatusUpdate: (message: string) => void,
+    config: { maxOutputTokens: number; thinkingBudget: number }
+): Promise<{ payload: GeminiUpdatePayload; rawJson: string }> {
+    const sanitizedSecret = sanitizeDocumentsForAI(secretDocuments);
+    const sanitizedGdd = sanitizeDocumentsForAI(gddContext);
+    const sanitizedScript = sanitizeDocumentsForAI(scriptContext);
+
+    const prompt = `
+    Você é um diretor de jogo sênior e estrategista. Sua tarefa é gerenciar um conjunto de documentos secretos e de alto nível.
+    Você tem acesso de LEITURA ao Game Design Document (GDD) e ao Roteiro completos para ter contexto total sobre o jogo.
+
+    **REGRAS CRÍTicas:**
+    1.  **ESCOPO DE MODIFICAÇÃO:** Você SÓ PODE modificar, criar ou deletar os 'DOCUMENTOS SECRETOS'. O GDD e o Roteiro são apenas para referência e NÃO PODEM ser alterados nesta tarefa.
+    2.  **Integração Estratégica:** Analise a nova 'IDEIA ESTRATÉGICA' e integre-a de forma inteligente nos 'DOCUMENTOS SECRETOS'. Isso pode envolver a criação de novos documentos secretos ou a atualização dos existentes.
+    3.  **Links:** Você pode criar links dos documentos secretos para os documentos do GDD ou Roteiro (usando [[Título do Documento]]), mas não o contrário.
+    4.  **Formato de Saída:** Sua resposta DEVE ser um único objeto JSON afetando APENAS a coleção de documentos secretos.
+    5.  **Raciocínio (thinkingProcess):** Explique seu raciocínio estratégico para as mudanças.
+    6.  **IDs:** Preserve os IDs existentes. Crie novos IDs para novos documentos usando o timestamp.
+    7.  **Idioma:** Toda a sua saída DEVE ESTAR EM PORTUGUÊS BRASILEIRO.
+
+    **CONTEXTO DE LEITURA - GDD:**
+    ---
+    ${JSON.stringify(sanitizedGdd, null, 2)}
+    ---
+
+    **CONTEXTO DE LEITURA - Roteiro:**
+    ---
+    ${JSON.stringify(sanitizedScript, null, 2)}
+    ---
+
+    **DOCUMENTOS SECRETOS (Seu escopo de trabalho):**
+    ---
+    ${JSON.stringify(sanitizedSecret, null, 2)}
+    ---
+
+    **NOVA IDEIA ESTRATÉGICA PARA INTEGRAR:**
+    ---
+    ${idea}
+    ---
+
+    Agora, execute a integração estratégica nos documentos secretos e retorne APENAS AS ALTERAÇÕES no formato JSON especificado.
+  `;
+
+    const geminiConfig = {
+        responseMimeType: "application/json",
+        responseSchema: updatePayloadSchema,
+        maxOutputTokens: config.maxOutputTokens,
+        thinkingConfig: { thinkingBudget: config.thinkingBudget },
+    };
+
+    try {
+        return await callGeminiWithRetryForUpdates(prompt, geminiConfig, onProgress, onStatusUpdate);
+    } catch (error) {
+        console.error("Erro final ao chamar a API Gemini para a ideia secreta:", error);
+        throw new Error(error instanceof Error ? error.message : "Falha ao obter uma resposta válida da IA.");
+    }
 }
 
 

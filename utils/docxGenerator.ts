@@ -70,7 +70,6 @@ export const generateDocxBlob = async (docsToProcess: Document[] | null, context
                                 children.push(new Paragraph({ children: [new TextRun({ text: item.term, bold: true })] }));
                                 children.push(new Paragraph({
                                     children: createRunsFromText(item.description),
-                                    // FIX: Corrected 'indentation' to 'indent' to match the 'docx' library's Paragraph properties.
                                     indent: { left: 400 },
                                     spacing: { after: 100 }
                                 }));
@@ -103,8 +102,8 @@ export const generateDocxBlob = async (docsToProcess: Document[] | null, context
                                 for (let i = 0; i < len; i++) {
                                     bytes[i] = binaryString.charCodeAt(i);
                                 }
+                                // FIX: The 'transformation' property for image dimensions is not supported in this version of the 'docx' library. Using top-level 'width' and 'height' properties resolves the type error.
                                 children.push(new Paragraph({
-                                    // FIX: Replaced the nested 'transformation' property with flattened 'width' and 'height' properties to match the IImageOptions interface of the likely 'docx' version being used.
                                     children: [new ImageRun({ data: bytes, width: 500, height: 375 })],
                                     alignment: AlignmentType.CENTER
                                 }));
@@ -157,7 +156,7 @@ export const generateDocxBlob = async (docsToProcess: Document[] | null, context
                 next: "Normal",
                 run: { color: "5A5A5A", italics: true },
                 paragraph: {
-                    indentation: { left: 400 },
+                    indent: { left: 400 },
                     border: { left: { color: "auto", space: 4, style: "single", size: 6 } },
                     spacing: { before: 200, after: 200 },
                 },

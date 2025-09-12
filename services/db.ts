@@ -1,9 +1,10 @@
 import { Document } from '../types';
 
 const DB_NAME = 'GDD_DATABASE';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented version to trigger onupgradeneeded
 const GDD_STORE_NAME = 'gdd_documents';
 const SCRIPT_STORE_NAME = 'script_documents';
+const SECRET_STORE_NAME = 'secret_documents';
 const DOCS_KEY = 'all_docs';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -33,6 +34,9 @@ function getDB(): Promise<IDBDatabase> {
             }
             if (!db.objectStoreNames.contains(SCRIPT_STORE_NAME)) {
                 db.createObjectStore(SCRIPT_STORE_NAME);
+            }
+            if (!db.objectStoreNames.contains(SECRET_STORE_NAME)) {
+                db.createObjectStore(SECRET_STORE_NAME);
             }
         };
     });
@@ -69,3 +73,6 @@ export const saveGddDocuments = (documents: Document[]) => saveDocumentsToStore(
 
 export const getScriptDocuments = () => getDocumentsFromStore(SCRIPT_STORE_NAME);
 export const saveScriptDocuments = (documents: Document[]) => saveDocumentsToStore(SCRIPT_STORE_NAME, documents);
+
+export const getSecretDocuments = () => getDocumentsFromStore(SECRET_STORE_NAME);
+export const saveSecretDocuments = (documents: Document[]) => saveDocumentsToStore(SECRET_STORE_NAME, documents);

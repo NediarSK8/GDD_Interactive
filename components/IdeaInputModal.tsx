@@ -4,7 +4,7 @@ interface IdeaInputModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (idea: string, config: { maxOutputTokens: number; thinkingBudget: number }) => void;
-  contextType: 'GDD' | 'Roteiro';
+  contextType: 'GDD' | 'Roteiro' | 'Secreta';
 }
 
 export const IdeaInputModal: React.FC<IdeaInputModalProps> = ({ isOpen, onClose, onSubmit, contextType }) => {
@@ -38,6 +38,13 @@ export const IdeaInputModal: React.FC<IdeaInputModalProps> = ({ isOpen, onClose,
     setThinkingBudget(value);
   };
 
+  const titleText = contextType === 'Secreta' ? 'Integrar Ideia Estratégica' : `Integrar Nova Ideia ao ${contextType}`;
+  const descriptionText = contextType === 'Secreta'
+    ? 'Descreva uma ideia de alto nível, segredo de enredo, ou estratégia de monetização. A IA analisará o GDD e Roteiro como contexto, mas só modificará seus documentos secretos.'
+    : `Cole qualquer texto aqui - um novo documento, uma ideia, um parágrafo para adicionar, notas de reunião, etc. A IA irá analisá-lo e sugerir a melhor forma de integrá-lo ao ${contextType}.`;
+  const placeholderText = contextType === 'Secreta'
+    ? 'Ex: O personagem Kael é na verdade um clone do vilão principal, e a profecia é uma farsa para manipular ambos...'
+    : 'Ex: Vamos adicionar um sistema de criação onde os jogadores podem combinar fragmentos elementais para criar novos feitiços...';
 
   return (
     <div 
@@ -49,17 +56,17 @@ export const IdeaInputModal: React.FC<IdeaInputModalProps> = ({ isOpen, onClose,
         onClick={e => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-white">Integrar Nova Ideia ao {contextType}</h2>
+            <h2 className="text-2xl font-bold text-white">{titleText}</h2>
             <button onClick={onClose} className="text-gray-400 hover:text-white">&times;</button>
         </div>
         <p className="text-gray-400 mb-4">
-            Cole qualquer texto aqui - um novo documento, uma ideia, um parágrafo para adicionar, notas de reunião, etc. A IA irá analisá-lo e sugerir a melhor forma de integrá-lo ao {contextType}.
+            {descriptionText}
         </p>
         <form onSubmit={handleSubmit}>
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            placeholder="Ex: Vamos adicionar um sistema de criação onde os jogadores podem combinar fragmentos elementais para criar novos feitiços..."
+            placeholder={placeholderText}
             className="w-full h-64 p-4 bg-gray-900 border border-gray-700 rounded-md text-gray-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
           />
           <div className="mt-4">

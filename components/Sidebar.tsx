@@ -448,11 +448,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
       </nav>
-      <footer className="p-4 border-t border-gray-700">
-          <div className="text-xs text-gray-400 space-y-1">
-              <div className="font-semibold uppercase tracking-wider">Tamanho Total</div>
-              <div className="text-lg font-bold text-white">{totalWordCount.toLocaleString('pt-BR')} palavras</div>
-              <div className="text-gray-500">~{Math.round(totalWordCount / 0.75).toLocaleString('pt-BR')} tokens estimados</div>
+      <footer className="p-4 border-t border-gray-700 text-xs text-gray-400">
+          <div className="font-semibold uppercase tracking-wider mb-2">Estatísticas ({title.split(' ')[0]})</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>Documentos:</div>
+              <div className="font-bold text-white text-right">{documents.length}</div>
+              <div>Categorias:</div>
+              <div className="font-bold text-white text-right">{categories.length}</div>
+              <div>Palavras:</div>
+              <div className="font-bold text-white text-right">{totalWordCount.toLocaleString('pt-BR')}</div>
+              <div className="text-gray-500">Tokens (est.):</div>
+              <div className="font-bold text-gray-500 text-right">~{(totalWordCount / 0.75).toLocaleString('pt-BR')}</div>
           </div>
       </footer>
     </aside>

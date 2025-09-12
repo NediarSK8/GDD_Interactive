@@ -73,7 +73,7 @@ export const AdvancedQueryWidget: React.FC<AdvancedQueryWidgetProps> = ({
     return (
       <button
         onClick={onToggle}
-        className="fixed bottom-6 right-6 bg-indigo-600 text-white rounded-full p-4 shadow-lg hover:bg-indigo-500 transition-transform hover:scale-110 z-50"
+        className="fixed bottom-4 right-4 md:bottom-6 md:right-6 bg-indigo-600 text-white rounded-full p-4 shadow-lg hover:bg-indigo-500 transition-transform hover:scale-110 z-50"
         title="Consulta Avançada"
       >
         <ChatIcon />
@@ -82,7 +82,7 @@ export const AdvancedQueryWidget: React.FC<AdvancedQueryWidgetProps> = ({
   }
 
   return (
-    <div className="fixed bottom-6 right-6 w-[400px] h-[600px] bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl flex flex-col z-50">
+    <div className="fixed bottom-4 right-4 w-[calc(100vw-2rem)] max-w-[400px] h-[70vh] max-h-[600px] bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl flex flex-col z-50 animate-fade-in">
       {/* Header */}
       <header className="flex items-center justify-between p-4 bg-gray-900/50 rounded-t-2xl border-b border-gray-700">
         <h3 className="text-lg font-bold text-white flex items-center">

@@ -4,6 +4,12 @@ import { getGddDocuments, saveGddDocuments, getScriptDocuments, saveScriptDocume
 import { INITIAL_DOCUMENTS, INITIAL_SCRIPT_DOCUMENTS } from '../constants';
 import { ensureTimestamps } from '../utils/helpers';
 
+// Este hook não é mais usado para gerenciar o estado dos documentos,
+// pois essa lógica foi movida para o componente App.tsx para melhor
+// centralização e gerenciamento do estado complexo (GDD, Roteiro, Secreto).
+// Ele permanece no projeto caso seja necessário para funcionalidades futuras
+// que não exijam o estado global do App.
+
 const GDD_STORAGE_KEY = 'interactive-gdd-documents';
 const SCRIPT_STORAGE_KEY = 'interactive-gdd-script-documents';
 
@@ -128,9 +134,6 @@ export const useDocuments = () => {
             const end = Math.min(text.length, index + query.length + 40);
             const snippetText = (start > 0 ? '...' : '') + text.substring(start, end) + (end < text.length ? '...' : '');
             const regex = new RegExp(`(${searchQuery.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi');
-            // FIX: Replaced JSX with React.createElement to avoid syntax errors in a .ts file.
-            // Also, replaced unsafe regex.test() in a loop with a check for odd-indexed elements from split(),
-            // which is the correct way to identify captured separators.
             const parts = snippetText.split(regex);
             return React.createElement(React.Fragment, null, ...parts.map((part, i) =>
                 i % 2 === 1
@@ -238,8 +241,6 @@ export const useDocuments = () => {
             const newContent = [...doc.content];
             const targetBlock = newContent[blockIndex];
             if (!targetBlock) return doc;
-            // FIX: Cast the result to ContentBlock. Spreading a discriminated union with a partial of that union
-            // can cause TypeScript to infer an invalid type. The cast is safe here due to the application's logic.
             newContent[blockIndex] = { ...targetBlock, ...partialBlock } as ContentBlock;
             return { ...doc, content: newContent, lastEdited: now };
         }));
