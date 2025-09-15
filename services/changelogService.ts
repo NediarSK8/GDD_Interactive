@@ -11,6 +11,7 @@ export const CHANGELOG_VERSIONS = ['0.0.1'];
 export const getChangelogContent = async (version: string): Promise<string> => {
     try {
         // Assume que os arquivos de changelog estão na pasta public/changelog
+        // FIX: Removed the leading slash to make the path relative.
         const response = await fetch(`changelog/${version}.md`);
         if (!response.ok) {
             throw new Error(`Não foi possível buscar o changelog da versão ${version}. Status: ${response.status}`);
