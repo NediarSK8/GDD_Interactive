@@ -111,7 +111,7 @@ export async function saveVersionToCloud(
             body: JSON.stringify({
                 type: options.type,
                 name: options.name,
-                gddData: dataToProcess,
+                versionData: dataToProcess,
                 secretData: secretToProcess
             }),
         });

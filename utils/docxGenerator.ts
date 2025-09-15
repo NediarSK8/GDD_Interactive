@@ -93,18 +93,31 @@ export const generateDocxBlob = async (docsToProcess: Document[] | null, context
                         break;
                     }
                     case 'image': {
-                        if (block.src && block.src.includes(',')) {
+                        if (block.src && block.src.startsWith('data:image')) {
                             try {
-                                const base64String = block.src.split(',')[1];
+                                const [meta, base64String] = block.src.split(',');
+                                const mimeMatch = meta.match(/image\/(jpeg|png|gif|bmp)/);
+                                if (!mimeMatch) {
+                                    throw new Error(`Unsupported image type for docx from data URL: ${meta}`);
+                                }
+                                const imageType = mimeMatch[1] as "jpeg" | "png" | "gif" | "bmp";
+
                                 const binaryString = atob(base64String);
                                 const len = binaryString.length;
                                 const bytes = new Uint8Array(len);
                                 for (let i = 0; i < len; i++) {
                                     bytes[i] = binaryString.charCodeAt(i);
                                 }
-                                // FIX: The 'transformation' property for image dimensions is not supported in this version of the 'docx' library. Using top-level 'width' and 'height' properties resolves the type error.
                                 children.push(new Paragraph({
-                                    children: [new ImageRun({ data: bytes, width: 500, height: 375 })],
+                                    children: [new ImageRun({
+                                        // FIX: Added `type: "buffer"` to resolve a TypeScript type error by disambiguating the IImageOptions union.
+                                        type: "buffer",
+                                        data: bytes,
+                                        transformation: {
+                                            width: 500,
+                                            height: 375,
+                                        },
+                                    })],
                                     alignment: AlignmentType.CENTER
                                 }));
                                 if (block.caption) {

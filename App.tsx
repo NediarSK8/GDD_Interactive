@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Chat } from '@google/genai';
 import { Sidebar } from './components/Sidebar';
@@ -23,9 +17,11 @@ import { SaveVersionModal } from './components/SaveVersionModal';
 import { VersionSelectionModal } from './components/VersionSelectionModal';
 import { UpdateNotificationModal } from './components/UpdateNotificationModal';
 import { UnlockSecretModal } from './components/UnlockSecretModal';
+import { MindMapView } from './components/MindMapView';
+import { ChangelogModal } from './components/ChangelogModal';
 // FIX: Imported SearchResult type to resolve 'Cannot find name' error.
-import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions, Version, SearchResult } from './types';
-import { analyzeAndIntegrateIdea, analyzeAndIntegrateScriptIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt, analyzeAndIntegrateSecretIdea } from './services/geminiService';
+import { Document, ContentBlock, GeminiUpdatePayload, ViewMode, CloudVersions, Version, SearchResult, MindMapNode } from './types';
+import { analyzeAndIntegrateIdea, analyzeAndIntegrateScriptIdea, refineText, updateDocumentsWithInstruction, startAdvancedChatQuery, generateImagePrompt, generateImageFromPrompt, analyzeAndIntegrateSecretIdea, generateMindMapStructure } from './services/geminiService';
 import { saveVersionToCloud, getVersions, loadVersion, getLatestVersionMeta, verifyAdminKey, uploadLatestDocx } from './services/cloudSyncService';
 import { getGddDocuments, saveGddDocuments, getScriptDocuments, saveScriptDocuments, getSecretDocuments, saveSecretDocuments } from './services/db';
 import { useGoogleAuth } from './auth/useGoogleAuth';
@@ -34,6 +30,7 @@ import { applyChanges, estimateTokens, ensureTimestamps } from './utils/helpers'
 import { BrainIcon, UploadIcon, DownloadIcon, GoogleDriveIcon, DocumentIcon, MagicWandIcon, AiInsightIcon, MenuIcon, ChevronUpIcon, ChevronDownIcon, CloudSyncIcon, SecretIcon } from './assets/icons';
 import { encryptData, decryptData } from './utils/crypto';
 import { INITIAL_DOCUMENTS, INITIAL_SCRIPT_DOCUMENTS } from './constants';
+import { APP_VERSION } from './services/changelogService';
 
 
 interface RefinementModalState {
@@ -57,6 +54,7 @@ interface ChatMessage {
 }
 
 const LOCAL_VERSION_META_KEY = 'currentCloudVersionMeta';
+const MIND_MAP_STORAGE_KEY = 'mind-map-nodes-v2';
 
 export default function App() {
   const { googleAccessToken, authError, handleGoogleAuthClick } = useGoogleAuth();
@@ -64,6 +62,7 @@ export default function App() {
   const [documents, setDocuments] = useState<Document[] | null>(null);
   const [scriptDocuments, setScriptDocuments] = useState<Document[] | null>(null);
   const [secretDocuments, setSecretDocuments] = useState<Document[] | null>(null);
+  const [mindMapNodes, setMindMapNodes] = useState<MindMapNode[]>([]);
   const [isDBLoading, setIsDBLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
 
@@ -83,6 +82,7 @@ export default function App() {
   const [isImageGenModalOpen, setIsImageGenModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isUnlockSecretModalOpen, setIsUnlockSecretModalOpen] = useState(false);
+  const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
   const [imageGenState, setImageGenState] = useState<{ docId: string; insertionIndex: number } | null>(null);
   const [lastAiInsight, setLastAiInsight] = useState<(GeminiUpdatePayload & { rawJson: string }) | null>(null);
 
@@ -157,6 +157,8 @@ export default function App() {
         return [];
     }, [viewMode, documents, scriptDocuments, secretDocuments]);
 
+    const allPublicDocuments = useMemo(() => [...(documents || []), ...(scriptDocuments || [])], [documents, scriptDocuments]);
+
     const activeDocumentId = useMemo(() => {
         if (viewMode === 'gdd') return activeGddDocumentId;
         if (viewMode === 'script') return activeScriptDocumentId;
@@ -197,6 +199,14 @@ export default function App() {
                 setDocuments(ensureTimestamps(gddDocs));
                 setScriptDocuments(ensureTimestamps(scriptDocs));
                 setSecretDocuments(ensureTimestamps(secretDocs));
+
+                try {
+                    const savedMap = localStorage.getItem(MIND_MAP_STORAGE_KEY);
+                    setMindMapNodes(savedMap ? JSON.parse(savedMap) : [{ id: 'root', label: 'Nome do Jogo' }]);
+                } catch (e) {
+                     console.error("Failed to load mind map from localStorage", e);
+                     setMindMapNodes([{ id: 'root', label: 'Nome do Jogo' }]);
+                }
     
                 if (gddDocs.length > 0) setActiveGddDocumentId(gddDocs[0].id);
                 if (scriptDocs.length > 0) setActiveScriptDocumentId(scriptDocs[0].id);
@@ -208,6 +218,7 @@ export default function App() {
                 setDocuments(ensureTimestamps(INITIAL_DOCUMENTS));
                 setScriptDocuments(ensureTimestamps(INITIAL_SCRIPT_DOCUMENTS));
                 setSecretDocuments([]);
+                setMindMapNodes([{ id: 'root', label: 'Nome do Jogo' }]);
             } finally {
                 setIsDBLoading(false);
             }
@@ -218,6 +229,7 @@ export default function App() {
      useEffect(() => { if (documents && !isDBLoading) { saveGddDocuments(documents); } }, [documents, isDBLoading]);
      useEffect(() => { if (scriptDocuments && !isDBLoading) { saveScriptDocuments(scriptDocuments); } }, [scriptDocuments, isDBLoading]);
      useEffect(() => { if (secretDocuments && !isDBLoading) { saveSecretDocuments(secretDocuments); } }, [secretDocuments, isDBLoading]);
+     useEffect(() => { if (!isDBLoading) { localStorage.setItem(MIND_MAP_STORAGE_KEY, JSON.stringify(mindMapNodes)); } }, [mindMapNodes, isDBLoading]);
     
     useEffect(() => {
         // This effect runs once after the initial data load from the DB is complete.
@@ -459,7 +471,7 @@ export default function App() {
     }
   };
 
-  const handleSubmitIdea = async (idea: string, config: { maxOutputTokens: number; thinkingBudget: number }) => {
+  const handleSubmitIdea = async (idea: string, config: { model: string; maxOutputTokens?: number; thinkingBudget: number }) => {
     setIsIdeaModalOpen(false);
     setAppError(null);
 
@@ -469,7 +481,7 @@ export default function App() {
         isLoading: true,
         message: 'A IA está analisando sua ideia...',
         currentTokens: 0,
-        estimatedTokens: config.maxOutputTokens,
+        estimatedTokens: config.maxOutputTokens || 0,
     });
 
     const onProgress = (tokens: number) => { setLoadingState(prev => ({ ...prev, currentTokens: tokens })); };
@@ -530,11 +542,11 @@ export default function App() {
     }
   };
 
-  const handleGlobalUpdate = async (instruction: string, config: { maxOutputTokens: number; thinkingBudget: number }) => {
+  const handleGlobalUpdate = async (instruction: string, config: { model: string; maxOutputTokens?: number; thinkingBudget: number }) => {
     setIsGlobalUpdateModalOpen(false);
     setAppError(null);
     
-    if (viewMode === 'secret') return;
+    if (viewMode === 'secret' || viewMode === 'mindmap') return;
 
     const documentsToUpdate = (viewMode === 'gdd' ? documents : scriptDocuments) || [];
     const setDocumentsToUpdate = viewMode === 'gdd' ? setDocuments : setScriptDocuments;
@@ -544,7 +556,7 @@ export default function App() {
         isLoading: true,
         message: 'A IA está reestruturando os documentos...',
         currentTokens: 0,
-        estimatedTokens: config.maxOutputTokens
+        estimatedTokens: config.maxOutputTokens || 0,
     });
 
     const onProgress = (tokens: number) => { setLoadingState(prev => ({ ...prev, currentTokens: tokens })); };
@@ -577,6 +589,36 @@ export default function App() {
         setTimeout(() => setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 }), 1000);
     }
   };
+
+  const handleGenerateMindMap = async () => {
+    setAppError(null);
+    setLoadingState({
+        isLoading: true,
+        message: 'A IA está gerando o mapa mental...',
+        currentTokens: 0,
+        estimatedTokens: 0,
+    });
+
+    try {
+        const newNodes = await generateMindMapStructure(allPublicDocuments);
+        
+        setConfirmationModalState({
+            isOpen: true,
+            title: 'Mapa Mental Gerado com Sucesso',
+            message: 'A IA criou uma nova estrutura para o mapa mental. Deseja substituir o mapa atual por esta nova versão?',
+            onConfirm: () => {
+                const rootNode = mindMapNodes.find(n => n.id === 'root') || { id: 'root', label: 'Nome do Jogo' };
+                setMindMapNodes([rootNode, ...newNodes]);
+            }
+        });
+    } catch (err) {
+        console.error("Falha ao gerar mapa mental com IA", err);
+        setAppError(err instanceof Error ? err.message : 'Ocorreu um erro desconhecido durante a geração do mapa mental.');
+    } finally {
+        setLoadingState({ isLoading: false, message: '', currentTokens: 0, estimatedTokens: 0 });
+    }
+  };
+
 
   const handleDownload = () => {
     setAppError(null);
@@ -1278,6 +1320,42 @@ export default function App() {
         });
     };
 
+    const handleDeleteDocument = (docId: string) => {
+        const docToDelete = activeDocuments.find(d => d.id === docId);
+        if (!docToDelete) return;
+
+        setConfirmationModalState({
+            isOpen: true,
+            title: 'Confirmar Exclusão de Documento',
+            message: `Você tem certeza de que deseja excluir permanentemente o documento "${docToDelete.title}"? Esta ação não pode ser desfeita.`,
+            onConfirm: () => performDeleteDocument(docId),
+        });
+    };
+
+    const performDeleteDocument = (docId: string) => {
+        const setDocs = viewMode === 'gdd' ? setDocuments : viewMode === 'script' ? setScriptDocuments : setSecretDocuments;
+        const setActiveDocId = viewMode === 'gdd' ? setActiveGddDocumentId : viewMode === 'script' ? setActiveScriptDocumentId : setActiveSecretDocumentId;
+
+        setDocs(prevDocs => {
+            const docs = prevDocs || [];
+            const docIndex = docs.findIndex(d => d.id === docId);
+            if (docIndex === -1) return docs;
+
+            const newDocs = docs.filter(d => d.id !== docId);
+
+            if (docId === activeDocumentId) {
+                let newActiveId: string | null = null;
+                if (newDocs.length > 0) {
+                    // Try to select the next document, or the previous one if it was the last
+                    newActiveId = newDocs[Math.min(docIndex, newDocs.length - 1)].id;
+                }
+                setActiveDocId(newActiveId);
+            }
+
+            return newDocs;
+        });
+    };
+
   const handleUnlockSecretCategory = async (enteredKey: string): Promise<boolean> => {
     if (!cloudSyncUrl) {
         setAppError("A URL de sincronização na nuvem não está configurada. Não é possível verificar a chave.");
@@ -1326,6 +1404,7 @@ export default function App() {
         onReorderDocuments: handleReorderDocuments,
         onReorderCategories: handleReorderCategories,
         onFindReferences: handleFindReferences,
+        onDeleteDocument: handleDeleteDocument,
         totalWordCount: totalWordCount,
         searchQuery: searchQuery,
         onSearchChange: setSearchQuery,
@@ -1338,6 +1417,8 @@ export default function App() {
             handleSelectSearchResult(docId, viewMode);
             if (isMobile) setIsMobileSidebarOpen(false);
         },
+        appVersion: APP_VERSION,
+        onOpenChangelog: () => setIsChangelogModalOpen(true),
     };
 
   return (
@@ -1350,46 +1431,50 @@ export default function App() {
           />
       )}
       
-      {/* Mobile Sidebar (overlay) */}
-      <div className={`md:hidden fixed top-0 left-0 h-full z-50 transition-transform duration-300 ease-in-out ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <Sidebar 
-          width={Math.min(320, window.innerWidth * 0.85)}
-          {...sidebarSharedProps}
-        />
-      </div>
-      {isMobile && isMobileSidebarOpen && (
-        <div className="fixed inset-0 bg-black/60 z-40 md:hidden animate-fade-in" onClick={() => setIsMobileSidebarOpen(false)}></div>
-      )}
-
-      {/* Desktop Sidebar (static) */}
-       <div className={`hidden md:flex h-full flex-shrink-0`}>
-         <Sidebar 
-            width={sidebarWidth}
-            {...sidebarSharedProps}
-          />
-       </div>
-
-      <div className="hidden md:block">
-        {!isSidebarCollapsed && (
-            <div
-                onMouseDown={handleMouseDownOnResizer}
-                className="w-1.5 h-full flex-shrink-0 bg-gray-700 hover:bg-indigo-500 transition-colors duration-200"
-                style={{ cursor: 'col-resize' }}
+      {viewMode !== 'mindmap' && (
+        <>
+          {/* Mobile Sidebar (overlay) */}
+          <div className={`md:hidden fixed top-0 left-0 h-full z-50 transition-transform duration-300 ease-in-out ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+            <Sidebar 
+              width={Math.min(320, window.innerWidth * 0.85)}
+              {...sidebarSharedProps}
             />
-        )}
-      </div>
+          </div>
+          {isMobile && isMobileSidebarOpen && (
+            <div className="fixed inset-0 bg-black/60 z-40 md:hidden animate-fade-in" onClick={() => setIsMobileSidebarOpen(false)}></div>
+          )}
 
-      <button
-        onClick={handleToggleSidebar}
-        className="absolute top-1/2 -translate-y-1/2 bg-gray-800 hover:bg-indigo-600 border border-gray-700 text-white rounded-full p-1 z-30 transition-all duration-200 shadow-lg hidden md:block"
-        style={{ left: isSidebarCollapsed ? '8px' : `${sidebarWidth - 16}px` }}
-        title={isSidebarCollapsed ? "Expandir" : "Recolher"}
-        aria-label={isSidebarCollapsed ? "Expandir painel lateral" : "Recolher painel lateral"}
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 transition-transform ${isSidebarCollapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
+          {/* Desktop Sidebar (static) */}
+          <div className={`hidden md:flex h-full flex-shrink-0`}>
+            <Sidebar 
+                width={sidebarWidth}
+                {...sidebarSharedProps}
+              />
+          </div>
+
+          <div className="hidden md:block">
+            {!isSidebarCollapsed && (
+                <div
+                    onMouseDown={handleMouseDownOnResizer}
+                    className="w-1.5 h-full flex-shrink-0 bg-gray-700 hover:bg-indigo-500 transition-colors duration-200"
+                    style={{ cursor: 'col-resize' }}
+                />
+            )}
+          </div>
+
+          <button
+            onClick={handleToggleSidebar}
+            className="absolute top-1/2 -translate-y-1/2 bg-gray-800 hover:bg-indigo-600 border border-gray-700 text-white rounded-full p-1 z-30 transition-all duration-200 shadow-lg hidden md:block"
+            style={{ left: isSidebarCollapsed ? '8px' : `${sidebarWidth - 16}px` }}
+            title={isSidebarCollapsed ? "Expandir" : "Recolher"}
+            aria-label={isSidebarCollapsed ? "Expandir painel lateral" : "Recolher painel lateral"}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 transition-transform ${isSidebarCollapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        </>
+      )}
 
       <main className="flex-1 flex flex-col bg-gray-900 overflow-y-auto min-w-0">
          <header className="sticky top-0 z-30 flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700">
@@ -1400,22 +1485,32 @@ export default function App() {
                 <div className="bg-gray-800 p-1 rounded-lg flex items-center">
                     <button onClick={() => setViewMode('gdd')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${viewMode === 'gdd' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>GDD</button>
                     <button onClick={() => setViewMode('script')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${viewMode === 'script' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Roteiro</button>
+                    <button onClick={() => setViewMode('mindmap')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Mapa Mental</button>
                     {isSecretUnlocked && (<button onClick={() => setViewMode('secret')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors flex items-center ${viewMode === 'secret' ? 'bg-red-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}><SecretIcon /> <span className="ml-1.5">Secreta</span></button>)}
                 </div>
                  <div className="h-6 w-px bg-gray-700 hidden md:block"></div>
-                 <div className="hidden md:flex items-center space-x-2">
-                    <button onClick={() => { setIsIdeaModalOpen(true); }} className="flex items-center px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors rounded-md shadow-sm">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>
-                        <span className="ml-2 hidden lg:inline">Integrar Ideia</span>
-                    </button>
-                    <button onClick={() => { setIsGlobalUpdateModalOpen(true); }} className="flex items-center px-4 py-2 text-sm text-gray-200 bg-gray-700 hover:bg-gray-600 transition-colors rounded-md shadow-sm disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed" title={`Atualizar todo o ${viewMode.toUpperCase()} com uma instrução`} disabled={viewMode === 'secret'}>
-                         <MagicWandIcon />
-                         <span className="ml-2 hidden lg:inline">Atualização Global</span>
-                     </button>
-                </div>
+                 {viewMode !== 'mindmap' ? (
+                    <div className="hidden md:flex items-center space-x-2">
+                        <button onClick={() => { setIsIdeaModalOpen(true); }} className="flex items-center px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors rounded-md shadow-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>
+                            <span className="ml-2 hidden lg:inline">Integrar Ideia</span>
+                        </button>
+                        <button onClick={() => { setIsGlobalUpdateModalOpen(true); }} className="flex items-center px-4 py-2 text-sm text-gray-200 bg-gray-700 hover:bg-gray-600 transition-colors rounded-md shadow-sm disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed" title={`Atualizar todo o ${viewMode.toUpperCase()} com uma instrução`} disabled={viewMode === 'secret'}>
+                            <MagicWandIcon />
+                            <span className="ml-2 hidden lg:inline">Atualização Global</span>
+                        </button>
+                    </div>
+                 ) : (
+                    <div className="hidden md:flex items-center space-x-2">
+                         <button onClick={handleGenerateMindMap} className="flex items-center px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors rounded-md shadow-sm">
+                            <MagicWandIcon />
+                            <span className="ml-2 hidden lg:inline">Gerar com IA</span>
+                        </button>
+                    </div>
+                 )}
              </div>
              <div className="flex-grow flex justify-center px-2 md:px-4">
-                {activeDocument && (
+                {activeDocument && viewMode !== 'mindmap' && (
                     <div className="relative w-full max-w-lg">
                         <input type="text" value={docSearchQuery} onChange={(e) => handleDocSearchQueryChange(e.target.value)} placeholder="Pesquisar neste documento..." className="w-full bg-gray-800 border border-gray-600 rounded-full py-2 pl-4 pr-32 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
                         {docSearchQuery && (
@@ -1433,14 +1528,24 @@ export default function App() {
                 {isMenuOpen && (
                     <div className="absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-2 z-50 animate-dropdown">
                          <div className="md:hidden border-b border-gray-600 my-1">
-                            <button onClick={() => { setIsIdeaModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>
-                                <span className="ml-3">Integrar Ideia</span>
-                            </button>
-                            <button onClick={() => { setIsGlobalUpdateModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent" disabled={viewMode === 'secret'}>
-                                <MagicWandIcon />
-                                <span className="ml-3">Atualização Global</span>
-                            </button>
+                            {viewMode !== 'mindmap' && (
+                                <>
+                                <button onClick={() => { setIsIdeaModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>
+                                    <span className="ml-3">Integrar Ideia</span>
+                                </button>
+                                <button onClick={() => { setIsGlobalUpdateModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent" disabled={viewMode === 'secret'}>
+                                    <MagicWandIcon />
+                                    <span className="ml-3">Atualização Global</span>
+                                </button>
+                                </>
+                            )}
+                             {viewMode === 'mindmap' && (
+                                <button onClick={() => { handleGenerateMindMap(); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left">
+                                    <MagicWandIcon />
+                                    <span className="ml-3">Gerar Mapa com IA</span>
+                                </button>
+                            )}
                          </div>
                          <button onClick={() => { setIsUploadModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left" title="Carregar GDD e Roteiro"><UploadIcon /><span className="ml-3">Carregar GDD & Roteiro</span></button>
                          <button onClick={() => { handleDownload(); setIsMenuOpen(false); }} className="w-full flex items-center px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors rounded-md text-left" title="Salvar GDD e Roteiro no computador"><DownloadIcon /><span className="ml-3">Salvar GDD & Roteiro</span></button>
@@ -1463,23 +1568,32 @@ export default function App() {
                 <button onClick={() => setAppError(null)} className="absolute top-2 right-2 text-red-200 hover:text-white p-1">&times;</button>
             </div>
          )}
-
-         <ContentView 
-            document={activeDocument} 
-            allDocuments={[...(documents || []), ...(scriptDocuments || []), ...(secretDocuments || [])]}
-            onNavigate={handleNavigate}
-            onRefineRequest={handleOpenRefinementModal}
-            onFindReferences={handleFindReferences}
-            onUpdateBlock={handleUpdateBlock}
-            onUpdateBlockContent={handleUpdateBlockContent}
-            onSetContent={handleSetContent}
-            scrollToHeading={scrollToHeading}
-            onDidScrollToHeading={handleDidScrollToHeading}
-            onOpenImageGenerationModal={handleOpenImageGenerationModal}
-            docSearchQuery={docSearchQuery}
-            docSearchCurrentIndex={docSearchCurrentIndex}
-            onDocSearchResultsChange={setDocSearchResultsCount}
-         />
+         
+         {viewMode === 'mindmap' ? (
+             <MindMapView 
+                allDocuments={allPublicDocuments}
+                onNavigate={handleNavigate}
+                nodes={mindMapNodes}
+                setNodes={setMindMapNodes}
+            />
+         ) : (
+             <ContentView 
+                document={activeDocument} 
+                allDocuments={[...(documents || []), ...(scriptDocuments || []), ...(secretDocuments || [])]}
+                onNavigate={handleNavigate}
+                onRefineRequest={handleOpenRefinementModal}
+                onFindReferences={handleFindReferences}
+                onUpdateBlock={handleUpdateBlock}
+                onUpdateBlockContent={handleUpdateBlockContent}
+                onSetContent={handleSetContent}
+                scrollToHeading={scrollToHeading}
+                onDidScrollToHeading={handleDidScrollToHeading}
+                onOpenImageGenerationModal={handleOpenImageGenerationModal}
+                docSearchQuery={docSearchQuery}
+                docSearchCurrentIndex={docSearchCurrentIndex}
+                onDocSearchResultsChange={setDocSearchResultsCount}
+             />
+         )}
       </main>
 
        {/* Global Sync Status Indicator */}
@@ -1582,6 +1696,10 @@ export default function App() {
         onClose={() => setIsUnlockSecretModalOpen(false)}
         onUnlock={handleUnlockSecretCategory}
       />
+      <ChangelogModal
+        isOpen={isChangelogModalOpen}
+        onClose={() => setIsChangelogModalOpen(false)}
+       />
       <AdvancedQueryWidget
         isOpen={isQueryWidgetOpen}
         onToggle={handleToggleQueryWidget}

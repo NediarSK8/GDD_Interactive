@@ -13,11 +13,14 @@ interface SidebarProps {
   onReorderDocuments: (draggedId: string, targetId: string) => void;
   onReorderCategories: (draggedCategory: string, targetCategory: string) => void;
   onFindReferences: (docId: string) => void;
+  onDeleteDocument: (docId: string) => void;
   totalWordCount: number;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   searchResults: SearchResult[];
   onSelectSearchResult: (docId: string, viewMode: ViewMode) => void;
+  appVersion: string;
+  onOpenChangelog: () => void;
 }
 
 const slugify = (text: string) => {
@@ -89,11 +92,14 @@ const ClearIcon: React.FC = () => (
     </svg>
 );
 
+import { TrashIcon } from '../assets/icons';
+
 export const Sidebar: React.FC<SidebarProps> = ({ 
     width, title, documents, categories, activeDocumentId, 
     onSelectDocument, onUpdateCategoryName, onUpdateDocumentTitle, 
     onReorderDocuments, onReorderCategories, onFindReferences, 
-    totalWordCount, searchQuery, onSearchChange, searchResults, onSelectSearchResult
+    onDeleteDocument, totalWordCount, searchQuery, onSearchChange, 
+    searchResults, onSelectSearchResult, appVersion, onOpenChangelog
 }) => {
   const [editing, setEditing] = useState<{ type: 'category'; id: string } | { type: 'document'; id: string } | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -227,7 +233,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
       className="bg-gray-800 text-white flex flex-col h-full border-r border-gray-700 flex-shrink-0 transition-all duration-300 overflow-hidden"
     >
       <div className="p-4 border-b border-gray-700">
-        <h2 className="text-xl font-semibold mb-3">{title}</h2>
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="text-xl font-semibold">{title}</h2>
+          <button 
+            onClick={onOpenChangelog}
+            className="text-xs font-mono bg-gray-700 text-gray-400 px-2 py-0.5 rounded-full hover:bg-indigo-600 hover:text-white transition-colors"
+            title="Ver histórico de versões"
+          >
+            v{appVersion}
+          </button>
+        </div>
         <div className="relative text-gray-400 focus-within:text-gray-100">
             <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
                 <SearchIcon />
@@ -399,6 +414,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                                       aria-label={`Edit title for ${doc.title}`}
                                                   >
                                                       <EditIcon />
+                                                  </button>
+                                                  <button 
+                                                      onClick={() => onDeleteDocument(doc.id)}
+                                                      className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                                                      aria-label={`Delete document ${doc.title}`}
+                                                      title={`Apagar ${doc.title}`}
+                                                  >
+                                                      <TrashIcon />
                                                   </button>
                                               </div>
                                           </>
